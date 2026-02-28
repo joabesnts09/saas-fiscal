@@ -1,6 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
 
 export type NfeItem = {
+  productId: string;
   description: string;
   quantity: number;
 };
@@ -56,6 +57,7 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
   const itens: NfeItem[] = det.map((item) => {
     const prod = item?.prod ?? {};
     return {
+      productId: String(prod?.cProd ?? ""),
       description: String(prod?.xProd ?? "Item"),
       quantity: parseNumber(prod?.qCom ?? 0),
     };

@@ -17,6 +17,7 @@ export type NotesTableCompany = { cnpj: string; razaoSocial: string };
 export type NotesTableFilters = {
   status: "all" | "Autorizada" | "Cancelada";
   company: string;
+  productId: string;
   minValue: string;
   maxValue: string;
   startDate: string;
@@ -25,6 +26,7 @@ export type NotesTableFilters = {
 export type NotesTableFilterHandlers = {
   setStatus: (value: "all" | "Autorizada" | "Cancelada") => void;
   setCompany: (value: string) => void;
+  setProductId: (value: string) => void;
   setMinValue: (value: string) => void;
   setMaxValue: (value: string) => void;
   setStartDate: (value: string) => void;
@@ -37,6 +39,7 @@ type NotesTableProps = {
   onToggleIncluded: (chave: string, value: boolean) => void;
   onSelectRecord: (record: NfeRecord) => void;
   companies: NotesTableCompany[];
+  productIds: string[];
   filters: NotesTableFilters;
   onFiltersChange: NotesTableFilterHandlers;
   onToggleAll: (value: boolean) => void;
@@ -49,6 +52,7 @@ export default function NotesTable({
   onToggleIncluded,
   onSelectRecord,
   companies,
+  productIds,
   filters,
   onFiltersChange,
   onToggleAll,
@@ -128,6 +132,25 @@ export default function NotesTable({
               />
             </div>
           </div>
+          <div className="grid gap-2">
+            <Label className="text-xs text-slate-500">ID do produto</Label>
+            <Select
+              value={filters.productId}
+              onValueChange={onFiltersChange.setProductId}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Selecione" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                {productIds.map((productId) => (
+                  <SelectItem key={productId} value={productId}>
+                    {productId}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -139,6 +162,7 @@ export default function NotesTable({
               <TableHead>NF-e/NFC-e</TableHead>
               <TableHead>Valor</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>ID Produto</TableHead>
               <TableHead>
                 <div className="flex items-center gap-2">
                   <Checkbox
@@ -154,7 +178,7 @@ export default function NotesTable({
           <TableBody>
             {records.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-slate-500">
+                <TableCell colSpan={8} className="py-8 text-center text-slate-500">
                   Faça upload dos XMLs para visualizar as notas.
                 </TableCell>
               </TableRow>
@@ -171,6 +195,9 @@ export default function NotesTable({
                     <Badge variant={row.status === "Autorizada" ? "secondary" : "destructive"}>
                       {row.status}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="text-sm text-slate-600">
+                    {row.itens[0]?.productId || "-"}
                   </TableCell>
                   <TableCell onClick={(event) => event.stopPropagation()}>
                     <div className="flex items-center gap-2">

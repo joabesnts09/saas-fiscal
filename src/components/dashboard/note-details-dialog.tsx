@@ -68,6 +68,7 @@ export default function NoteDetailsDialog({
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>ID produto</TableHead>
                 <TableHead>Descrição</TableHead>
                 <TableHead className="text-right">Quantidade</TableHead>
               </TableRow>
@@ -75,6 +76,7 @@ export default function NoteDetailsDialog({
             <TableBody>
               {record.itens.map((item, index) => (
                 <TableRow key={`${record.chave}-${index}`}>
+                  <TableCell>{item.productId || "-"}</TableCell>
                   <TableCell>{item.description}</TableCell>
                   <TableCell className="text-right">{item.quantity}</TableCell>
                 </TableRow>

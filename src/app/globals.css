@@ -123,4 +123,15 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  button,
+  a,
+  [role="button"],
+  summary,
+  label,
+  input,
+  select,
+  textarea {
+    cursor: pointer;
+  }
 }

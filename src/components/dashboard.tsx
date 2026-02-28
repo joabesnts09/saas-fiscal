@@ -11,7 +11,7 @@ import NoteDetailsDialog from "@/components/dashboard/note-details-dialog";
 import NotesTable, {
   type NotesTableFilters,
   type NotesTableFilterHandlers,
-} from "./dashboard/notes-table";
+} from "@/components/dashboard/notes-table";
 import PrestacaoPanel from "./dashboard/prestacao-panel";
 import StatsCards from "./dashboard/stats-cards";
 import Topbar, { TopbarSearch } from "./dashboard/topbar";
@@ -32,6 +32,7 @@ export default function Dashboard() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "Autorizada" | "Cancelada">("all");
   const [companyFilter, setCompanyFilter] = useState("all");
+  const [productIdFilter, setProductIdFilter] = useState("all");
   const [minValue, setMinValue] = useState("");
   const [maxValue, setMaxValue] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -41,6 +42,7 @@ export default function Dashboard() {
 
   const filteredRecords = useMemo(() => {
     const q = query.toLowerCase();
+    const productId = productIdFilter.trim().toLowerCase();
     const min = Number.parseFloat(minValue.replace(",", ".")) || 0;
     const max = Number.parseFloat(maxValue.replace(",", ".")) || Number.POSITIVE_INFINITY;
     const startKey = startDate || "";
@@ -60,6 +62,9 @@ export default function Dashboard() {
     return records.filter((record) => {
       const matchesQuery =
         !q || [record.chave, record.numero].some((value) => value.toLowerCase().includes(q));
+      const matchesProduct =
+        productId === "all" ||
+        record.itens.some((item) => item.productId.toLowerCase().includes(productId));
       const matchesStatus = statusFilter === "all" || record.status === statusFilter;
       const matchesCompany =
         companyFilter === "all" || record.emitente.cnpj === companyFilter;
@@ -70,6 +75,7 @@ export default function Dashboard() {
 
       return (
         matchesQuery &&
+        matchesProduct &&
         matchesStatus &&
         matchesCompany &&
         matchesValue &&
@@ -77,7 +83,17 @@ export default function Dashboard() {
         matchesEnd
       );
     });
-  }, [records, query, statusFilter, companyFilter, minValue, maxValue, startDate, endDate]);
+  }, [
+    records,
+    query,
+    productIdFilter,
+    statusFilter,
+    companyFilter,
+    minValue,
+    maxValue,
+    startDate,
+    endDate,
+  ]);
 
   const companies = useMemo(() => {
     const map = new Map<string, string>();
@@ -87,6 +103,16 @@ export default function Dashboard() {
       }
     });
     return Array.from(map.entries()).map(([cnpj, razaoSocial]) => ({ cnpj, razaoSocial }));
+  }, [records]);
+
+  const productIds = useMemo(() => {
+    const set = new Set<string>();
+    records.forEach((record) => {
+      record.itens.forEach((item) => {
+        if (item.productId) set.add(item.productId);
+      });
+    });
+    return Array.from(set.values());
   }, [records]);
 
   const metrics = useMemo(() => {
@@ -293,6 +319,7 @@ export default function Dashboard() {
               }
               onSelectRecord={(record) => setSelectedRecord(record)}
               companies={companies}
+              productIds={productIds}
               allSelected={allSelected}
               onToggleAll={(value) => {
                 setIncludedMap((prev) => {
@@ -307,21 +334,23 @@ export default function Dashboard() {
                 {
                   status: statusFilter,
                   company: companyFilter,
+                  productId: productIdFilter,
                   minValue,
                   maxValue,
                   startDate,
                   endDate,
-                } satisfies NotesTableFilters
+                } as NotesTableFilters
               }
               onFiltersChange={
                 {
                   setStatus: setStatusFilter,
                   setCompany: setCompanyFilter,
+                  setProductId: setProductIdFilter,
                   setMinValue,
                   setMaxValue,
                   setStartDate,
                   setEndDate,
-                } satisfies NotesTableFilterHandlers
+                } as NotesTableFilterHandlers
               }
             />
           </TabsContent>
