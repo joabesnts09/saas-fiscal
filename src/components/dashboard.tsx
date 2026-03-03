@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
@@ -32,7 +32,9 @@ export default function Dashboard() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "Autorizada" | "Cancelada">("all");
   const [companyFilter, setCompanyFilter] = useState("all");
-  const [productIdFilter, setProductIdFilter] = useState("all");
+  const [productIdsFilter, setProductIdsFilter] = useState<string[]>([]);
+  const [descriptionsFilter, setDescriptionsFilter] = useState<string[]>([]);
+  const [cestsFilter, setCestsFilter] = useState<string[]>([]);
   const [minValue, setMinValue] = useState("");
   const [maxValue, setMaxValue] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -40,9 +42,75 @@ export default function Dashboard() {
   const [includedMap, setIncludedMap] = useState<Record<string, boolean>>({});
   const [selectedRecord, setSelectedRecord] = useState<NfeRecord | null>(null);
 
+  const hasInitializedProductIds = useRef(false);
+  const hasInitializedDescriptions = useRef(false);
+  const hasInitializedCests = useRef(false);
+
+  const productIds = useMemo(() => {
+    const set = new Set<string>();
+    records.forEach((record) => {
+      record.itens.forEach((item) => {
+        if (item.productId) set.add(item.productId);
+      });
+    });
+    return Array.from(set.values());
+  }, [records]);
+
+  const descriptions = useMemo(() => {
+    const set = new Set<string>();
+    records.forEach((record) => {
+      record.itens.forEach((item) => {
+        if (item.description) set.add(item.description);
+      });
+    });
+    return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
+  }, [records]);
+
+  const cests = useMemo(() => {
+    const set = new Set<string>();
+    records.forEach((record) => {
+      record.itens.forEach((item) => {
+        if (item.cest) set.add(item.cest);
+      });
+    });
+    return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
+  }, [records]);
+
+  useEffect(() => {
+    if (productIds.length > 0 && !hasInitializedProductIds.current) {
+      setProductIdsFilter(productIds);
+      hasInitializedProductIds.current = true;
+    }
+  }, [productIds]);
+
+  useEffect(() => {
+    if (descriptions.length > 0 && !hasInitializedDescriptions.current) {
+      setDescriptionsFilter(descriptions);
+      hasInitializedDescriptions.current = true;
+    }
+  }, [descriptions]);
+
+  useEffect(() => {
+    if (cests.length > 0 && !hasInitializedCests.current) {
+      setCestsFilter(cests);
+      hasInitializedCests.current = true;
+    }
+  }, [cests]);
+
   const filteredRecords = useMemo(() => {
     const q = query.toLowerCase();
-    const productId = productIdFilter.trim().toLowerCase();
+    const productIdsToFilter =
+      productIdsFilter.length === 0 || productIdsFilter.length === productIds.length
+        ? []
+        : productIdsFilter.map((id) => id.trim().toLowerCase()).filter(Boolean);
+    const descriptionsToFilter =
+      descriptionsFilter.length === 0 || descriptionsFilter.length === descriptions.length
+        ? []
+        : descriptionsFilter.map((d) => d.trim().toLowerCase()).filter(Boolean);
+    const cestsToFilter =
+      cestsFilter.length === 0 || cestsFilter.length === cests.length
+        ? []
+        : cestsFilter.map((c) => c.trim().toLowerCase()).filter(Boolean);
     const min = Number.parseFloat(minValue.replace(",", ".")) || 0;
     const max = Number.parseFloat(maxValue.replace(",", ".")) || Number.POSITIVE_INFINITY;
     const startKey = startDate || "";
@@ -61,10 +129,29 @@ export default function Dashboard() {
 
     return records.filter((record) => {
       const matchesQuery =
-        !q || [record.chave, record.numero].some((value) => value.toLowerCase().includes(q));
+        !q ||
+        [record.chave, record.numero].some((value) => value.toLowerCase().includes(q)) ||
+        record.itens.some(
+          (item) =>
+            item.productId.toLowerCase().includes(q) ||
+            item.description.toLowerCase().includes(q) ||
+            (item.cest && item.cest.toLowerCase().includes(q))
+        );
       const matchesProduct =
-        productId === "all" ||
-        record.itens.some((item) => item.productId.toLowerCase().includes(productId));
+        productIdsToFilter.length === 0 ||
+        record.itens.some((item) =>
+          productIdsToFilter.some((pid) => item.productId.toLowerCase() === pid)
+        );
+      const matchesDescription =
+        descriptionsToFilter.length === 0 ||
+        record.itens.some((item) =>
+          descriptionsToFilter.some((d) => item.description.toLowerCase() === d)
+        );
+      const matchesCest =
+        cestsToFilter.length === 0 ||
+        record.itens.some((item) =>
+          cestsToFilter.some((c) => item.cest?.toLowerCase() === c)
+        );
       const matchesStatus = statusFilter === "all" || record.status === statusFilter;
       const matchesCompany =
         companyFilter === "all" || record.emitente.cnpj === companyFilter;
@@ -76,6 +163,8 @@ export default function Dashboard() {
       return (
         matchesQuery &&
         matchesProduct &&
+        matchesDescription &&
+        matchesCest &&
         matchesStatus &&
         matchesCompany &&
         matchesValue &&
@@ -86,7 +175,12 @@ export default function Dashboard() {
   }, [
     records,
     query,
-    productIdFilter,
+    productIds,
+    descriptions,
+    cests,
+    productIdsFilter,
+    descriptionsFilter,
+    cestsFilter,
     statusFilter,
     companyFilter,
     minValue,
@@ -103,16 +197,6 @@ export default function Dashboard() {
       }
     });
     return Array.from(map.entries()).map(([cnpj, razaoSocial]) => ({ cnpj, razaoSocial }));
-  }, [records]);
-
-  const productIds = useMemo(() => {
-    const set = new Set<string>();
-    records.forEach((record) => {
-      record.itens.forEach((item) => {
-        if (item.productId) set.add(item.productId);
-      });
-    });
-    return Array.from(set.values());
   }, [records]);
 
   const metrics = useMemo(() => {
@@ -320,6 +404,8 @@ export default function Dashboard() {
               onSelectRecord={(record) => setSelectedRecord(record)}
               companies={companies}
               productIds={productIds}
+              descriptions={descriptions}
+              cests={cests}
               allSelected={allSelected}
               onToggleAll={(value) => {
                 setIncludedMap((prev) => {
@@ -334,7 +420,9 @@ export default function Dashboard() {
                 {
                   status: statusFilter,
                   company: companyFilter,
-                  productId: productIdFilter,
+                  productIds: productIdsFilter,
+                  descriptions: descriptionsFilter,
+                  cests: cestsFilter,
                   minValue,
                   maxValue,
                   startDate,
@@ -345,7 +433,9 @@ export default function Dashboard() {
                 {
                   setStatus: setStatusFilter,
                   setCompany: setCompanyFilter,
-                  setProductId: setProductIdFilter,
+                  setProductIds: setProductIdsFilter,
+                  setDescriptions: setDescriptionsFilter,
+                  setCests: setCestsFilter,
                   setMinValue,
                   setMaxValue,
                   setStartDate,

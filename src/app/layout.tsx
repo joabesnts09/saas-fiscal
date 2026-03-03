@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import AppSidebar from "@/components/app-sidebar";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,10 +29,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} h-screen overflow-hidden antialiased`}
         suppressHydrationWarning
       >
-        <div className="flex h-screen w-full bg-slate-950">
-          <AppSidebar />
-          <main className="flex-1 overflow-y-auto bg-slate-50">{children}</main>
-        </div>
+        {children}
       </body>
     </html>
   );

@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import MultiSelectFilter from "./multi-select-filter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatDate, summarizeItems, type NfeRecord } from "@/lib/nfe";
 
@@ -17,7 +18,9 @@ export type NotesTableCompany = { cnpj: string; razaoSocial: string };
 export type NotesTableFilters = {
   status: "all" | "Autorizada" | "Cancelada";
   company: string;
-  productId: string;
+  productIds: string[];
+  descriptions: string[];
+  cests: string[];
   minValue: string;
   maxValue: string;
   startDate: string;
@@ -26,7 +29,9 @@ export type NotesTableFilters = {
 export type NotesTableFilterHandlers = {
   setStatus: (value: "all" | "Autorizada" | "Cancelada") => void;
   setCompany: (value: string) => void;
-  setProductId: (value: string) => void;
+  setProductIds: (value: string[]) => void;
+  setDescriptions: (value: string[]) => void;
+  setCests: (value: string[]) => void;
   setMinValue: (value: string) => void;
   setMaxValue: (value: string) => void;
   setStartDate: (value: string) => void;
@@ -40,6 +45,8 @@ type NotesTableProps = {
   onSelectRecord: (record: NfeRecord) => void;
   companies: NotesTableCompany[];
   productIds: string[];
+  descriptions: string[];
+  cests: string[];
   filters: NotesTableFilters;
   onFiltersChange: NotesTableFilterHandlers;
   onToggleAll: (value: boolean) => void;
@@ -53,6 +60,8 @@ export default function NotesTable({
   onSelectRecord,
   companies,
   productIds,
+  descriptions,
+  cests,
   filters,
   onFiltersChange,
   onToggleAll,
@@ -132,25 +141,28 @@ export default function NotesTable({
               />
             </div>
           </div>
-          <div className="grid gap-2">
-            <Label className="text-xs text-slate-500">ID do produto</Label>
-            <Select
-              value={filters.productId}
-              onValueChange={onFiltersChange.setProductId}
-            >
-              <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="Selecione" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos</SelectItem>
-                {productIds.map((productId) => (
-                  <SelectItem key={productId} value={productId}>
-                    {productId}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <MultiSelectFilter
+            label="ID do produto"
+            options={productIds}
+            selected={filters.productIds}
+            onSelectionChange={onFiltersChange.setProductIds}
+            placeholder="Todos"
+          />
+          <MultiSelectFilter
+            label="Descrição"
+            options={descriptions}
+            selected={filters.descriptions}
+            onSelectionChange={onFiltersChange.setDescriptions}
+            placeholder="Todas"
+            formatOption={(v) => (v.length > 40 ? `${v.slice(0, 40)}...` : v)}
+          />
+          <MultiSelectFilter
+            label="CEST"
+            options={cests}
+            selected={filters.cests}
+            onSelectionChange={onFiltersChange.setCests}
+            placeholder="Todos"
+          />
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -208,7 +220,14 @@ export default function NotesTable({
                       <span className="text-xs text-slate-500">Incluída</span>
                     </div>
                   </TableCell>
-                  <TableCell className="text-right">{summarizeItems(row.itens)}</TableCell>
+                  <TableCell className="max-w-[220px] text-right">
+                    <span
+                      className="block truncate text-right"
+                      title={summarizeItems(row.itens)}
+                    >
+                      {summarizeItems(row.itens)}
+                    </span>
+                  </TableCell>
                 </TableRow>
               ))
             )}

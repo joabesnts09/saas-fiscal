@@ -1,4 +1,4 @@
-import { ArrowUpRight, Bell, Filter, Search, UploadCloud } from "lucide-react";
+import { ArrowUpRight, Bell, Search, UploadCloud } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -24,21 +24,15 @@ type SearchProps = {
 
 export function TopbarSearch({ value, onChange }: SearchProps) {
   return (
-    <>
-      <div className="relative w-full max-w-xs">
-        <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-slate-400" />
-        <Input
-          className="pl-9"
-          placeholder="Buscar por chave ou nota"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </div>
-      <Button variant="outline" className="gap-2">
-        <Filter className="size-4" />
-        Filtros
-      </Button>
-    </>
+    <div className="relative w-full max-w-xs">
+      <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-emerald-500" />
+      <Input
+        className="border-emerald-200/80 bg-white pl-10 shadow-sm ring-1 ring-slate-200/80 placeholder:text-slate-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
+        placeholder="Buscar por chave, nota, ID, descrição ou CEST"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </div>
   );
 }
 

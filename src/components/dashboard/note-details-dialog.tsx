@@ -35,7 +35,7 @@ export default function NoteDetailsDialog({
         <div className="grid gap-4 text-sm text-slate-600 sm:grid-cols-2">
           <div>
             <p className="text-xs uppercase text-slate-400">Chave</p>
-            <p className="text-slate-900">{record.chave}</p>
+            <p className="break-all text-slate-900">{record.chave}</p>
           </div>
           <div>
             <p className="text-xs uppercase text-slate-400">Data de emissão</p>
@@ -69,7 +69,7 @@ export default function NoteDetailsDialog({
             <TableHeader>
               <TableRow>
                 <TableHead>ID produto</TableHead>
-                <TableHead>Descrição</TableHead>
+                <TableHead className="text-right">Descrição</TableHead>
                 <TableHead className="text-right">Quantidade</TableHead>
               </TableRow>
             </TableHeader>
@@ -77,7 +77,11 @@ export default function NoteDetailsDialog({
               {record.itens.map((item, index) => (
                 <TableRow key={`${record.chave}-${index}`}>
                   <TableCell>{item.productId || "-"}</TableCell>
-                  <TableCell>{item.description}</TableCell>
+                  <TableCell className="max-w-[280px] text-right">
+                  <span className="block truncate text-right" title={item.description}>
+                    {item.description}
+                  </span>
+                </TableCell>
                   <TableCell className="text-right">{item.quantity}</TableCell>
                 </TableRow>
               ))}

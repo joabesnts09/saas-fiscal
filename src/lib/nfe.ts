@@ -3,6 +3,7 @@ import { XMLParser } from "fast-xml-parser";
 export type NfeItem = {
   productId: string;
   description: string;
+  cest: string;
   quantity: number;
 };
 
@@ -59,6 +60,7 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
     return {
       productId: String(prod?.cProd ?? ""),
       description: String(prod?.xProd ?? "Item"),
+      cest: String(prod?.CEST ?? ""),
       quantity: parseNumber(prod?.qCom ?? 0),
     };
   });
