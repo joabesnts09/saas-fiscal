@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
@@ -42,10 +42,6 @@ export default function Dashboard() {
   const [includedMap, setIncludedMap] = useState<Record<string, boolean>>({});
   const [selectedRecord, setSelectedRecord] = useState<NfeRecord | null>(null);
 
-  const hasInitializedProductIds = useRef(false);
-  const hasInitializedDescriptions = useRef(false);
-  const hasInitializedCests = useRef(false);
-
   const productIds = useMemo(() => {
     const set = new Set<string>();
     records.forEach((record) => {
@@ -76,41 +72,13 @@ export default function Dashboard() {
     return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
   }, [records]);
 
-  useEffect(() => {
-    if (productIds.length > 0 && !hasInitializedProductIds.current) {
-      setProductIdsFilter(productIds);
-      hasInitializedProductIds.current = true;
-    }
-  }, [productIds]);
-
-  useEffect(() => {
-    if (descriptions.length > 0 && !hasInitializedDescriptions.current) {
-      setDescriptionsFilter(descriptions);
-      hasInitializedDescriptions.current = true;
-    }
-  }, [descriptions]);
-
-  useEffect(() => {
-    if (cests.length > 0 && !hasInitializedCests.current) {
-      setCestsFilter(cests);
-      hasInitializedCests.current = true;
-    }
-  }, [cests]);
-
   const filteredRecords = useMemo(() => {
     const q = query.toLowerCase();
-    const productIdsToFilter =
-      productIdsFilter.length === 0 || productIdsFilter.length === productIds.length
-        ? []
-        : productIdsFilter.map((id) => id.trim().toLowerCase()).filter(Boolean);
-    const descriptionsToFilter =
-      descriptionsFilter.length === 0 || descriptionsFilter.length === descriptions.length
-        ? []
-        : descriptionsFilter.map((d) => d.trim().toLowerCase()).filter(Boolean);
-    const cestsToFilter =
-      cestsFilter.length === 0 || cestsFilter.length === cests.length
-        ? []
-        : cestsFilter.map((c) => c.trim().toLowerCase()).filter(Boolean);
+    const productIdsToFilter = productIdsFilter.map((id) => id.trim().toLowerCase()).filter(Boolean);
+    const descriptionsToFilter = descriptionsFilter
+      .map((d) => d.trim().toLowerCase())
+      .filter(Boolean);
+    const cestsToFilter = cestsFilter.map((c) => c.trim().toLowerCase()).filter(Boolean);
     const min = Number.parseFloat(minValue.replace(",", ".")) || 0;
     const max = Number.parseFloat(maxValue.replace(",", ".")) || Number.POSITIVE_INFINITY;
     const startKey = startDate || "";

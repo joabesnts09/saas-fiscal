@@ -32,31 +32,23 @@ export default function MultiSelectFilter({
   formatOption = (v) => v,
   className,
 }: MultiSelectFilterProps) {
-  const allSelected = selected.length === 0 || selected.length === options.length;
+  const allSelected = selected.length === 0;
 
   const toggleOption = (value: string) => {
-    const isChecked = selected.length === 0 || selected.includes(value);
+    const isChecked = selected.includes(value);
     if (isChecked) {
-      if (selected.length === 0) {
-        onSelectionChange(options.filter((o) => o !== value));
-      } else {
-        onSelectionChange(selected.filter((v) => v !== value));
-      }
+      onSelectionChange(selected.filter((v) => v !== value));
     } else {
       onSelectionChange([...selected, value]);
     }
   };
 
   const toggleAll = () => {
-    onSelectionChange(options.length > 0 ? options : []);
+    onSelectionChange([]);
   };
 
   const triggerLabel =
-    selected.length === 0
-      ? placeholder
-      : selected.length === options.length
-        ? placeholder
-        : `${selected.length} selecionado(s)`;
+    selected.length === 0 ? placeholder : `${selected.length} selecionado(s)`;
 
   return (
     <div className={cn("grid gap-2", className)}>
@@ -85,7 +77,7 @@ export default function MultiSelectFilter({
           </DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
           {options.map((value) => {
-            const isChecked = selected.length === 0 || selected.includes(value);
+            const isChecked = selected.includes(value);
             return (
               <DropdownMenuCheckboxItem
                 key={value}
