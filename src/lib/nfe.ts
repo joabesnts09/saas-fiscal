@@ -14,9 +14,11 @@ export type NfeRecord = {
   dataEmissao: string;
   valorTotal: number;
   status: "Autorizada" | "Cancelada";
+  cnpjMismatch?: boolean;
   emitente: {
     cnpj: string;
     razaoSocial: string;
+    endereco?: string;
   };
   itens: NfeItem[];
 };
@@ -68,6 +70,14 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
   const rawId = nfe?.Id ?? nfe?.["@_Id"] ?? "";
 
   const emit = nfe.emit ?? {};
+  const ender = emit.enderEmit ?? emit.ender ?? {};
+  const enderecoParts = [
+    [ender.xLgr, ender.nro, ender.xCpl].filter(Boolean).join(" "),
+    ender.xBairro,
+    [ender.xMun, ender.UF].filter(Boolean).join(ender.xMun && ender.UF ? "/" : ""),
+    ender.CEP ? `CEP. ${String(ender.CEP).replace(/^(\d{5})(\d{3})$/, "$1-$2")}` : "",
+  ].filter(Boolean);
+  const endereco = enderecoParts.join(", ") || undefined;
 
   return {
     chave: String(rawId).replace(/^NFe/, "") || String(prot?.chNFe ?? ""),
@@ -79,6 +89,7 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
     emitente: {
       cnpj: String(emit?.CNPJ ?? ""),
       razaoSocial: String(emit?.xNome ?? ""),
+      endereco,
     },
     itens,
   };
@@ -103,4 +114,24 @@ export const formatDate = (value: string) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString("pt-BR");
+};
+
+export const formatCnpj = (cnpj: string | null) => {
+  if (!cnpj) return "—";
+  const s = cnpj.replace(/\D/g, "");
+  if (s.length !== 14) return cnpj;
+  return `${s.slice(0, 2)}.${s.slice(2, 5)}.${s.slice(5, 8)}/${s.slice(8, 12)}-${s.slice(12)}`;
+};
+
+const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+export const getMonthLabel = (records: { dataEmissao: string }[]) => {
+  if (!records.length) return "";
+  const dates = records.map((r) => new Date(r.dataEmissao)).filter((d) => !Number.isNaN(d.getTime()));
+  if (!dates.length) return "";
+  const min = new Date(Math.min(...dates.map((d) => d.getTime())));
+  const max = new Date(Math.max(...dates.map((d) => d.getTime())));
+  const sameMonth = min.getFullYear() === max.getFullYear() && min.getMonth() === max.getMonth();
+  if (sameMonth) return `${MESES[min.getMonth()]} de ${min.getFullYear()}`;
+  return `${MESES[min.getMonth()]} a ${MESES[max.getMonth()]} de ${max.getFullYear()}`;
 };

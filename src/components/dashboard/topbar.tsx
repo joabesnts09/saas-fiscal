@@ -1,5 +1,6 @@
 import { ArrowUpRight, Bell, Search, UploadCloud } from "lucide-react";
 
+import ClientSelector from "@/components/client-selector";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -46,11 +47,14 @@ export default function Topbar({
   return (
     <header className="border-b border-slate-200 bg-white px-6 py-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-sm text-slate-500">Bem-vindo, Joabe</p>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Visão geral da prestação de contas
-          </h1>
+        <div className="flex flex-wrap items-center gap-4">
+          <div>
+            <p className="text-sm text-slate-500">Bem-vindo</p>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Visão geral da prestação de contas
+            </h1>
+          </div>
+          <ClientSelector />
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="outline" className="gap-2" asChild>

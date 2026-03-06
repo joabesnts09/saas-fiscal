@@ -1,0 +1,105 @@
+
+// Multi-tenant SaaS para contadores
+// Account = escritório contábil
+// Client = empresa do contador (cliente)
+// User = usuário do escritório
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Account {
+  id                  String   @id @default(uuid())
+  name                String   // Nome do escritório contábil
+  cnpj                String?  // CNPJ do escritório
+  plan                String   @default("free") // free, pro, enterprise
+  stripeCustomerId    String?  // ID do cliente no Stripe
+  stripeSubscriptionId String? // ID da assinatura ativa
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  users   User[]
+  clients Client[]
+}
+
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  password        String?   // bcrypt hash (null para OAuth)
+  name            String
+  image           String?   // avatar do Google
+  role            String    @default("user") // admin, user, superadmin
+  accountId       String
+  emailVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+}
+
+model VerificationCode {
+  id        String   @id @default(uuid())
+  email     String
+  code      String
+  type      String   // signup
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email, type])
+}
+
+model Client {
+  id           String   @id @default(uuid())
+  name         String   // Nome fantasia ou razão social
+  cnpj         String?
+  endereco     String?  // Endereço para cabeçalho de exportação
+  contato      String?  // Nome do contato
+  responsavel  String?  // Nome do responsável
+  accountId    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  account    Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  nfeRecords NfeRecord[]
+  prestacao  PrestacaoIncluida[]
+
+  @@index([accountId])
+}
+
+model NfeRecord {
+  id          String   @id @default(uuid())
+  chave       String
+  numero      String
+  serie       String
+  dataEmissao String
+  valorTotal  Float
+  status      String   // Autorizada, Cancelada
+  emitenteJson String  // JSON: { cnpj, razaoSocial, endereco }
+  itensJson   String   // JSON: NfeItem[]
+  clientId    String
+  createdAt   DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, chave])
+  @@index([clientId])
+  @@index([clientId, dataEmissao])
+}
+
+model PrestacaoIncluida {
+  id        String   @id @default(uuid())
+  chave     String
+  clientId  String
+  createdAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, chave])
+  @@index([clientId])
+}

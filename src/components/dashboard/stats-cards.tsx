@@ -8,6 +8,8 @@ type Metrics = {
   count: number;
   authorizedCount: number;
   canceledCount: number;
+  cnpjMismatchCount?: number;
+  inconsistenciesCount?: number;
   pendingValue: number;
   pendingCount: number;
 };
@@ -41,8 +43,10 @@ export default function StatsCards({ metrics }: StatsCardsProps) {
     },
     {
       title: "Inconsistências",
-      value: `${metrics.canceledCount} alertas`,
-      change: "Notas canceladas",
+      value: `${metrics.inconsistenciesCount ?? metrics.canceledCount} alertas`,
+      change: metrics.cnpjMismatchCount
+        ? "Notas canceladas e CNPJ divergente"
+        : "Notas canceladas",
       icon: AlertTriangle,
       iconClass: "bg-rose-100 text-rose-600",
     },

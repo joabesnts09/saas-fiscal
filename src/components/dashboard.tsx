@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
@@ -15,6 +15,24 @@ import NotesTable, {
 import PrestacaoPanel from "./dashboard/prestacao-panel";
 import StatsCards from "./dashboard/stats-cards";
 import Topbar, { TopbarSearch } from "./dashboard/topbar";
+
+function getMonthsFromRecords(records: NfeRecord[]): { value: string; label: string }[] {
+  const monthSet = new Set<string>();
+  for (const r of records) {
+    const d = r.dataEmissao?.trim();
+    if (!d || d.length < 7) continue;
+    const yyyyMm = d.slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(yyyyMm)) monthSet.add(yyyyMm);
+  }
+  return Array.from(monthSet)
+    .sort((a, b) => b.localeCompare(a))
+    .map((value) => {
+      const [y, m] = value.split("-");
+      const d = new Date(Number(y), Number(m) - 1, 1);
+      const label = d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+      return { value, label: label.charAt(0).toUpperCase() + label.slice(1) };
+    });
+}
 
 const downloadBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
@@ -37,40 +55,59 @@ export default function Dashboard() {
   const [cestsFilter, setCestsFilter] = useState<string[]>([]);
   const [minValue, setMinValue] = useState("");
   const [maxValue, setMaxValue] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [selectedMonth, setSelectedMonth] = useState("");
   const [includedMap, setIncludedMap] = useState<Record<string, boolean>>({});
   const [selectedRecord, setSelectedRecord] = useState<NfeRecord | null>(null);
 
+  const monthOptions = useMemo(() => getMonthsFromRecords(records), [records]);
+
+  useEffect(() => {
+    if (monthOptions.length === 0) {
+      setSelectedMonth("");
+    } else {
+      const valid = monthOptions.some((o) => o.value === selectedMonth);
+      if (!valid) setSelectedMonth(monthOptions[0]!.value);
+    }
+  }, [monthOptions, selectedMonth]);
+
+  const monthFilteredRecords = useMemo(() => {
+    if (!selectedMonth) return [];
+    const prefix = `${selectedMonth}-`;
+    return records.filter((r) => {
+      const d = r.dataEmissao?.trim() ?? "";
+      return d.length >= 7 && (d.slice(0, 7) === selectedMonth || d.startsWith(prefix));
+    });
+  }, [records, selectedMonth]);
+
   const productIds = useMemo(() => {
     const set = new Set<string>();
-    records.forEach((record) => {
+    monthFilteredRecords.forEach((record) => {
       record.itens.forEach((item) => {
         if (item.productId) set.add(item.productId);
       });
     });
     return Array.from(set.values());
-  }, [records]);
+  }, [monthFilteredRecords]);
 
   const descriptions = useMemo(() => {
     const set = new Set<string>();
-    records.forEach((record) => {
+    monthFilteredRecords.forEach((record) => {
       record.itens.forEach((item) => {
         if (item.description) set.add(item.description);
       });
     });
     return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
-  }, [records]);
+  }, [monthFilteredRecords]);
 
   const cests = useMemo(() => {
     const set = new Set<string>();
-    records.forEach((record) => {
+    monthFilteredRecords.forEach((record) => {
       record.itens.forEach((item) => {
         if (item.cest) set.add(item.cest);
       });
     });
     return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
-  }, [records]);
+  }, [monthFilteredRecords]);
 
   const filteredRecords = useMemo(() => {
     const q = query.toLowerCase();
@@ -81,21 +118,8 @@ export default function Dashboard() {
     const cestsToFilter = cestsFilter.map((c) => c.trim().toLowerCase()).filter(Boolean);
     const min = Number.parseFloat(minValue.replace(",", ".")) || 0;
     const max = Number.parseFloat(maxValue.replace(",", ".")) || Number.POSITIVE_INFINITY;
-    const startKey = startDate || "";
-    const endKey = endDate || "";
 
-    const getDateKey = (value: string) => {
-      if (!value) return "";
-      if (value.length >= 10) return value.slice(0, 10);
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return "";
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
-
-    return records.filter((record) => {
+    return monthFilteredRecords.filter((record) => {
       const matchesQuery =
         !q ||
         [record.chave, record.numero].some((value) => value.toLowerCase().includes(q)) ||
@@ -124,9 +148,6 @@ export default function Dashboard() {
       const matchesCompany =
         companyFilter === "all" || record.emitente.cnpj === companyFilter;
       const matchesValue = record.valorTotal >= min && record.valorTotal <= max;
-      const recordKey = getDateKey(record.dataEmissao);
-      const matchesStart = !startKey || (recordKey && recordKey >= startKey);
-      const matchesEnd = !endKey || (recordKey && recordKey <= endKey);
 
       return (
         matchesQuery &&
@@ -135,13 +156,11 @@ export default function Dashboard() {
         matchesCest &&
         matchesStatus &&
         matchesCompany &&
-        matchesValue &&
-        matchesStart &&
-        matchesEnd
+        matchesValue
       );
     });
   }, [
-    records,
+    monthFilteredRecords,
     query,
     productIds,
     descriptions,
@@ -153,36 +172,34 @@ export default function Dashboard() {
     companyFilter,
     minValue,
     maxValue,
-    startDate,
-    endDate,
   ]);
 
   const companies = useMemo(() => {
     const map = new Map<string, string>();
-    records.forEach((record) => {
+    monthFilteredRecords.forEach((record) => {
       if (record.emitente.cnpj) {
         map.set(record.emitente.cnpj, record.emitente.razaoSocial || record.emitente.cnpj);
       }
     });
     return Array.from(map.entries()).map(([cnpj, razaoSocial]) => ({ cnpj, razaoSocial }));
-  }, [records]);
+  }, [monthFilteredRecords]);
 
   const metrics = useMemo(() => {
-    const totalValue = records.reduce((acc, record) => acc + record.valorTotal, 0);
-    const authorized = records.filter((record) => record.status === "Autorizada");
-    const canceled = records.filter((record) => record.status === "Cancelada");
+    const totalValue = monthFilteredRecords.reduce((acc, record) => acc + record.valorTotal, 0);
+    const authorized = monthFilteredRecords.filter((record) => record.status === "Autorizada");
+    const canceled = monthFilteredRecords.filter((record) => record.status === "Cancelada");
     const included = authorized.filter((record) => includedMap[record.chave]);
     const pending = authorized.filter((record) => !includedMap[record.chave]);
     return {
       totalValue,
-      count: records.length,
+      count: monthFilteredRecords.length,
       authorizedCount: authorized.length,
       canceledCount: canceled.length,
       pendingValue: pending.reduce((acc, record) => acc + record.valorTotal, 0),
       pendingCount: pending.length,
       includedCount: included.length,
     };
-  }, [records, includedMap]);
+  }, [monthFilteredRecords, includedMap]);
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -225,10 +242,10 @@ export default function Dashboard() {
   };
 
   const exportSource = useMemo(() => {
-    const included = records.filter((record) => includedMap[record.chave]);
+    const included = monthFilteredRecords.filter((record) => includedMap[record.chave]);
     if (included.length > 0) return included;
     return filteredRecords;
-  }, [records, filteredRecords, includedMap]);
+  }, [monthFilteredRecords, filteredRecords, includedMap]);
 
   const allSelected = useMemo(() => {
     if (filteredRecords.length === 0) return false;
@@ -393,8 +410,7 @@ export default function Dashboard() {
                   cests: cestsFilter,
                   minValue,
                   maxValue,
-                  startDate,
-                  endDate,
+                  month: selectedMonth,
                 } as NotesTableFilters
               }
               onFiltersChange={
@@ -406,16 +422,16 @@ export default function Dashboard() {
                   setCests: setCestsFilter,
                   setMinValue,
                   setMaxValue,
-                  setStartDate,
-                  setEndDate,
+                  setMonth: setSelectedMonth,
                 } as NotesTableFilterHandlers
               }
+              monthOptions={monthOptions}
             />
           </TabsContent>
 
           <TabsContent value="prestacao" className="mt-6">
             <PrestacaoPanel
-              records={records}
+              records={monthFilteredRecords}
               metrics={metrics}
               onExportCsv={exportCsv}
               onExportPdf={exportPdf}
@@ -424,7 +440,7 @@ export default function Dashboard() {
           </TabsContent>
 
           <TabsContent value="alertas" className="mt-6">
-            <AlertsPanel records={records} metrics={metrics} />
+            <AlertsPanel records={monthFilteredRecords} metrics={metrics} />
           </TabsContent>
         </Tabs>
       </section>
