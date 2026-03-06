@@ -175,16 +175,15 @@ export default function DocumentosManager() {
     setUploading(true);
     try {
       const parsed: NfeRecord[] = [];
-      for (const file of Array.from(files)) {
+      const fileList = Array.from(files);
+      for (const file of fileList) {
         if (file.name.toLowerCase().endsWith(".zip")) {
           try {
             const zip = await JSZip.loadAsync(file);
-            for (const entry of Object.values(zip.files).filter((e) => !e.dir)) {
-              if (!entry.name.toLowerCase().endsWith(".xml")) continue;
-              const text = await entry.async("text");
-              const r = parseNfeXml(text);
-              if (r?.chave) parsed.push(r);
-            }
+            const entries = Object.values(zip.files).filter((e) => !e.dir && e.name.toLowerCase().endsWith(".xml"));
+            const texts = await Promise.all(entries.map((e) => e.async("text")));
+            const results = texts.map((t) => parseNfeXml(t)).filter((r): r is NfeRecord => !!r?.chave);
+            parsed.push(...results);
           } catch {
             /* ignore */
           }

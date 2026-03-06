@@ -68,42 +68,38 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         { status: 403 }
       );
     }
-    let saved = 0;
+    const validRecords = (records as NfeRecord[]).filter((r) => r?.chave);
     let cnpjMismatchCount = 0;
-    for (const r of records as NfeRecord[]) {
-      if (!r?.chave) continue;
+    const upserts = validRecords.map((r) => {
       const hasMismatch = !cnpjMatches(r.emitente?.cnpj, client.cnpj);
       if (hasMismatch) cnpjMismatchCount++;
       const emitenteData = { ...(r.emitente ?? {}), cnpjMismatch: hasMismatch };
-      try {
-        await prisma.nfeRecord.upsert({
-          where: { clientId_chave: { clientId, chave: r.chave } },
-          create: {
-            clientId,
-            chave: r.chave,
-            numero: r.numero ?? "",
-            serie: r.serie ?? "",
-            dataEmissao: r.dataEmissao ?? "",
-            valorTotal: r.valorTotal ?? 0,
-            status: r.status ?? "Autorizada",
-            emitenteJson: JSON.stringify(emitenteData),
-            itensJson: JSON.stringify(r.itens ?? []),
-          },
-          update: {
-            numero: r.numero ?? "",
-            serie: r.serie ?? "",
-            dataEmissao: r.dataEmissao ?? "",
-            valorTotal: r.valorTotal ?? 0,
-            status: r.status ?? "Autorizada",
-            emitenteJson: JSON.stringify(emitenteData),
-            itensJson: JSON.stringify(r.itens ?? []),
-          },
-        });
-        saved++;
-      } catch (e) {
-        console.warn("Erro ao salvar nota", r.chave, e);
-      }
-    }
+      return prisma.nfeRecord.upsert({
+        where: { clientId_chave: { clientId, chave: r.chave } },
+        create: {
+          clientId,
+          chave: r.chave,
+          numero: r.numero ?? "",
+          serie: r.serie ?? "",
+          dataEmissao: r.dataEmissao ?? "",
+          valorTotal: r.valorTotal ?? 0,
+          status: r.status ?? "Autorizada",
+          emitenteJson: JSON.stringify(emitenteData),
+          itensJson: JSON.stringify(r.itens ?? []),
+        },
+        update: {
+          numero: r.numero ?? "",
+          serie: r.serie ?? "",
+          dataEmissao: r.dataEmissao ?? "",
+          valorTotal: r.valorTotal ?? 0,
+          status: r.status ?? "Autorizada",
+          emitenteJson: JSON.stringify(emitenteData),
+          itensJson: JSON.stringify(r.itens ?? []),
+        },
+      });
+    });
+    const results = await Promise.allSettled(upserts);
+    const saved = results.filter((r) => r.status === "fulfilled").length;
     return NextResponse.json({ saved, cnpjMismatchCount });
   } catch (error) {
     console.error("Notes POST error:", error);

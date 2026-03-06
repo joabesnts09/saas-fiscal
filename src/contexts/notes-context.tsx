@@ -15,6 +15,7 @@ import { toast } from "@/lib/toast";
 import { useClient } from "@/contexts/client-context";
 
 const IMPORT_BATCH_SIZE = 20;
+const IMPORT_PARALLEL_BATCHES = 2;
 
 export type UploadProgress = { sent: number; total: number } | null;
 
@@ -81,25 +82,32 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     try {
       let totalSaved = 0;
       let totalCnpjMismatch = 0;
+      const batches: NfeRecord[][] = [];
       for (let i = 0; i < newRecords.length; i += IMPORT_BATCH_SIZE) {
-        const batch = newRecords.slice(i, i + IMPORT_BATCH_SIZE);
-        const res = await fetch(`/api/clients/${selectedClient.id}/notes`, {
-          method: "POST",
-          headers: getAuthHeaders(),
-          credentials: "include",
-          body: JSON.stringify(batch),
+        batches.push(newRecords.slice(i, i + IMPORT_BATCH_SIZE));
+      }
+      for (let i = 0; i < batches.length; i += IMPORT_PARALLEL_BATCHES) {
+        const chunk = batches.slice(i, i + IMPORT_PARALLEL_BATCHES);
+        const promises = chunk.map(async (batch) => {
+          const res = await fetch(`/api/clients/${selectedClient.id}/notes`, {
+            method: "POST",
+            headers: getAuthHeaders(),
+            credentials: "include",
+            body: JSON.stringify(batch),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data?.error ?? "Erro ao importar notas");
+          }
+          return res.json();
         });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          toast.error(data?.error ?? "Erro ao importar notas");
-          setUploadProgress(null);
-          return;
+        const results = await Promise.all(promises);
+        for (const data of results) {
+          totalSaved += data?.saved ?? 0;
+          totalCnpjMismatch += data?.cnpjMismatchCount ?? 0;
         }
-        const data = await res.json();
-        const saved = data?.saved ?? batch.length;
-        totalSaved += saved;
-        totalCnpjMismatch += data?.cnpjMismatchCount ?? 0;
-        setUploadProgress({ sent: Math.min(i + IMPORT_BATCH_SIZE, newRecords.length), total: newRecords.length });
+        const sent = Math.min((i + chunk.length) * IMPORT_BATCH_SIZE, newRecords.length);
+        setUploadProgress({ sent, total: newRecords.length });
       }
       await fetchNotes();
       toast.success(`${totalSaved} nota(s) importada(s) com sucesso.`);
@@ -110,7 +118,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       console.error("Erro ao salvar notas:", e);
-      toast.error("Erro ao importar notas");
+      toast.error(e instanceof Error ? e.message : "Erro ao importar notas");
     } finally {
       setUploadProgress(null);
     }
