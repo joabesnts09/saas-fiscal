@@ -69,6 +69,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       );
     }
     const validRecords = (records as NfeRecord[]).filter((r) => r?.chave);
+    const chavesToImport = validRecords.map((r) => r.chave);
+    const existing = await prisma.nfeRecord.findMany({
+      where: { clientId, chave: { in: chavesToImport } },
+      select: { chave: true },
+    });
+    const existingChaves = new Set(existing.map((e) => e.chave));
+
     let cnpjMismatchCount = 0;
     const upserts = validRecords.map((r) => {
       const hasMismatch = !cnpjMatches(r.emitente?.cnpj, client.cnpj);
@@ -100,7 +107,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     });
     const results = await Promise.allSettled(upserts);
     const saved = results.filter((r) => r.status === "fulfilled").length;
-    return NextResponse.json({ saved, cnpjMismatchCount });
+    const duplicateCount = validRecords.filter((r) => existingChaves.has(r.chave)).length;
+    return NextResponse.json({ saved, cnpjMismatchCount, duplicateCount });
   } catch (error) {
     console.error("Notes POST error:", error);
     return NextResponse.json({ error: "Erro ao salvar notas" }, { status: 500 });

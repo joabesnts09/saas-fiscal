@@ -82,6 +82,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     try {
       let totalSaved = 0;
       let totalCnpjMismatch = 0;
+      let totalDuplicates = 0;
       const batches: NfeRecord[][] = [];
       for (let i = 0; i < newRecords.length; i += IMPORT_BATCH_SIZE) {
         batches.push(newRecords.slice(i, i + IMPORT_BATCH_SIZE));
@@ -105,12 +106,21 @@ export function NotesProvider({ children }: { children: ReactNode }) {
         for (const data of results) {
           totalSaved += data?.saved ?? 0;
           totalCnpjMismatch += data?.cnpjMismatchCount ?? 0;
+          totalDuplicates += data?.duplicateCount ?? 0;
         }
         const sent = Math.min((i + chunk.length) * IMPORT_BATCH_SIZE, newRecords.length);
         setUploadProgress({ sent, total: newRecords.length });
       }
       await fetchNotes();
-      toast.success(`${totalSaved} nota(s) importada(s) com sucesso.`);
+      const newCount = totalSaved - totalDuplicates;
+      if (newCount > 0) {
+        toast.success(`${newCount} nota(s) importada(s) com sucesso.`);
+      }
+      if (totalDuplicates > 0) {
+        toast.warning(
+          `${totalDuplicates} nota(s) duplicada(s) — já existiam no sistema e não foram importadas novamente.`
+        );
+      }
       if (totalCnpjMismatch > 0) {
         toast.warning(
           `${totalCnpjMismatch} nota(s) com CNPJ diferente da empresa foram marcadas como inconsistência.`
