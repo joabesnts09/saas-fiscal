@@ -16,10 +16,13 @@ import { useClient } from "@/contexts/client-context";
 
 const IMPORT_BATCH_SIZE = 20;
 
+export type UploadProgress = { sent: number; total: number } | null;
+
 type NotesContextType = {
   records: NfeRecord[];
   includedMap: Record<string, boolean>;
   loading: boolean;
+  uploadProgress: UploadProgress;
   addRecords: (records: NfeRecord[]) => Promise<void>;
   setIncludedMap: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setRecords: React.Dispatch<React.SetStateAction<NfeRecord[]>>;
@@ -37,6 +40,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
   const [records, setRecords] = useState<NfeRecord[]>([]);
   const [includedMap, setIncludedMap] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress>(null);
   const prestacaoSyncRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchNotes = useCallback(async () => {
@@ -73,6 +77,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
 
   const addRecords = useCallback(async (newRecords: NfeRecord[]) => {
     if (!selectedClient?.id || newRecords.length === 0) return;
+    setUploadProgress({ sent: 0, total: newRecords.length });
     try {
       let totalSaved = 0;
       let totalCnpjMismatch = 0;
@@ -87,11 +92,14 @@ export function NotesProvider({ children }: { children: ReactNode }) {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           toast.error(data?.error ?? "Erro ao importar notas");
+          setUploadProgress(null);
           return;
         }
         const data = await res.json();
-        totalSaved += data?.saved ?? batch.length;
+        const saved = data?.saved ?? batch.length;
+        totalSaved += saved;
         totalCnpjMismatch += data?.cnpjMismatchCount ?? 0;
+        setUploadProgress({ sent: Math.min(i + IMPORT_BATCH_SIZE, newRecords.length), total: newRecords.length });
       }
       await fetchNotes();
       toast.success(`${totalSaved} nota(s) importada(s) com sucesso.`);
@@ -103,6 +111,8 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       console.error("Erro ao salvar notas:", e);
       toast.error("Erro ao importar notas");
+    } finally {
+      setUploadProgress(null);
     }
   }, [selectedClient?.id, fetchNotes]);
 
@@ -198,6 +208,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
         records,
         includedMap,
         loading,
+        uploadProgress,
         addRecords,
         setIncludedMap,
         setRecords,

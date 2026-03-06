@@ -62,7 +62,7 @@ export default function DocumentosManager() {
   const { selectedClient, refetch } = useClient();
   const [headerModalOpen, setHeaderModalOpen] = useState(false);
   const { confirm } = useConfirm();
-  const { records, includedMap, loading: notesLoading, addRecords, setIncludedMap, updateRecord, deleteRecord, deleteByMonth } = useNotes();
+  const { records, includedMap, loading: notesLoading, uploadProgress, addRecords, setIncludedMap, updateRecord, deleteRecord, deleteByMonth } = useNotes();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "Autorizada" | "Cancelada">("all");
   const [companyFilter, setCompanyFilter] = useState("all");
@@ -334,9 +334,34 @@ export default function DocumentosManager() {
 
   return (
     <div className="min-h-full bg-slate-50 text-slate-900">
-      {uploading && (
-        <div className="fixed left-0 right-0 top-0 z-50 h-1 overflow-hidden bg-slate-200">
-          <div className="h-full w-1/3 animate-import-progress bg-emerald-500" />
+      {(uploading || uploadProgress) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="flex items-center gap-4">
+              <div className="flex size-12 shrink-0 items-center justify-center rounded-full bg-emerald-100">
+                <Loader2 className="size-6 animate-spin text-emerald-600" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-slate-900">Importando notas</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums text-emerald-600">
+                  {uploadProgress ? `${uploadProgress.sent} de ${uploadProgress.total}` : "..."}
+                </p>
+                <p className="mt-0.5 text-sm text-slate-500">
+                  {uploadProgress
+                    ? `Enviadas ${uploadProgress.sent.toLocaleString("pt-BR")} de ${uploadProgress.total.toLocaleString("pt-BR")} notas`
+                    : "Processando arquivos..."}
+                </p>
+                {uploadProgress && uploadProgress.total > 0 && (
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-full bg-emerald-500 transition-all duration-300"
+                      style={{ width: `${Math.round((uploadProgress.sent / uploadProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
       <header className="border-b border-slate-200 bg-white px-6 py-4">
