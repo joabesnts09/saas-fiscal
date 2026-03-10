@@ -37,7 +37,6 @@ export default function ClientSelector() {
       <SelectTrigger className="w-[220px] border-emerald-200/60 bg-white">
         <Building2 className="mr-2 size-4 text-emerald-500" />
         <SelectValue placeholder="Selecione o cliente" />
-        <ChevronDown className="size-4 opacity-50" />
       </SelectTrigger>
       <SelectContent>
         {clients.map((client) => (

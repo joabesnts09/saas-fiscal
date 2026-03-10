@@ -5,6 +5,29 @@ export type NfeItem = {
   description: string;
   cest: string;
   quantity: number;
+  // Campos fiscais (prod)
+  ncm?: string;
+  cfop?: string;
+  uCom?: string;
+  vUnCom?: number;
+  vProd?: number;
+  // ICMS
+  orig?: string;
+  cst?: string;
+  modBC?: string;
+  vBC?: number;
+  pICMS?: number;
+  vICMS?: number;
+  // PIS
+  cstPis?: string;
+  vBCPis?: number;
+  pPIS?: number;
+  vPIS?: number;
+  // COFINS
+  cstCofins?: string;
+  vBCCofins?: number;
+  pCOFINS?: number;
+  vCOFINS?: number;
 };
 
 export type NfeRecord = {
@@ -59,11 +82,52 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
 
   const itens: NfeItem[] = det.map((item) => {
     const prod = item?.prod ?? {};
+    const imposto = item?.imposto ?? {};
+    const icmsGroup = imposto?.ICMS ?? {};
+    const pisGroup = imposto?.PIS ?? {};
+    const cofinsGroup = imposto?.COFINS ?? {};
+
+    // ICMS: pode estar em ICMS00, ICMS10, ICMS20, ICMS40, ICMS51, ICMS60, ICMS90, ICMSSN101, ICMSSN102, ICMSSN500, etc.
+    const icmsKeys = Object.keys(icmsGroup).filter((k) => k.startsWith("ICMS"));
+    const icms = icmsKeys.length > 0 ? icmsGroup[icmsKeys[0]] ?? {} : {};
+    const orig = icms.orig ?? icms.ORIG ?? "";
+    const cst = icms.CST ?? icms.CSOSN ?? icms.cst ?? icms.csosn ?? "";
+
+    // PIS: PISAliq, PISOutr, PISNT, PISQtde
+    const pisKeys = Object.keys(pisGroup).filter((k) => k.startsWith("PIS"));
+    const pis = pisKeys.length > 0 ? pisGroup[pisKeys[0]] ?? {} : {};
+
+    // COFINS: COFINSAliq, COFINSOutr, COFINSNT, COFINSQtde
+    const cofinsKeys = Object.keys(cofinsGroup).filter((k) => k.startsWith("COFINS"));
+    const cofins = cofinsKeys.length > 0 ? cofinsGroup[cofinsKeys[0]] ?? {} : {};
+
+    const cfopRaw = prod.CFOP ?? prod.cfop;
+    const cfop = Array.isArray(cfopRaw) ? cfopRaw[0] : cfopRaw;
+
     return {
       productId: String(prod?.cProd ?? ""),
       description: String(prod?.xProd ?? "Item"),
-      cest: String(prod?.CEST ?? ""),
-      quantity: parseNumber(prod?.qCom ?? 0),
+      cest: String(prod?.CEST ?? prod?.cest ?? ""),
+      quantity: parseNumber(prod?.qCom ?? prod?.qcom ?? 0),
+      ncm: String(prod?.NCM ?? prod?.ncm ?? "").trim() || undefined,
+      cfop: cfop ? String(cfop) : undefined,
+      uCom: String(prod?.uCom ?? prod?.ucom ?? "").trim() || undefined,
+      vUnCom: parseNumber(prod?.vUnCom ?? prod?.vUnTrib ?? 0),
+      vProd: parseNumber(prod?.vProd ?? 0),
+      orig: String(orig).trim() || undefined,
+      cst: String(cst).trim() || undefined,
+      modBC: String(icms?.modBC ?? icms?.ModBC ?? icms?.modBc ?? "").trim() || undefined,
+      vBC: parseNumber(icms?.vBC ?? icms?.VBC ?? 0),
+      pICMS: parseNumber(icms?.pICMS ?? icms?.pIcms ?? icms?.PICMS ?? 0),
+      vICMS: parseNumber(icms?.vICMS ?? icms?.vIcms ?? icms?.VICMS ?? 0),
+      cstPis: String(pis?.CST ?? pis?.cst ?? "").trim() || undefined,
+      vBCPis: parseNumber(pis?.vBC ?? pis?.VBC ?? 0),
+      pPIS: parseNumber(pis?.pPIS ?? pis?.pPis ?? pis?.PPIS ?? 0),
+      vPIS: parseNumber(pis?.vPIS ?? pis?.vPis ?? pis?.VPIS ?? 0),
+      cstCofins: String(cofins?.CST ?? cofins?.cst ?? "").trim() || undefined,
+      vBCCofins: parseNumber(cofins?.vBC ?? cofins?.VBC ?? 0),
+      pCOFINS: parseNumber(cofins?.pCOFINS ?? cofins?.pCofins ?? cofins?.PCOFINS ?? 0),
+      vCOFINS: parseNumber(cofins?.vCOFINS ?? cofins?.vCofins ?? cofins?.VCOFINS ?? 0),
     };
   });
 

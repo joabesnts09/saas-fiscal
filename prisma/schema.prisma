@@ -65,11 +65,30 @@ model Client {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  account    Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  nfeRecords NfeRecord[]
-  prestacao  PrestacaoIncluida[]
+  account      Account       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  nfeRecords   NfeRecord[]
+  prestacao    PrestacaoIncluida[]
+  fiscalAlerts FiscalAlert[]
 
   @@index([accountId])
+}
+
+model FiscalAlert {
+  id        String   @id @default(uuid())
+  clientId  String
+  chave     String
+  itemIndex Int?     // índice do item (null = alerta da nota inteira)
+  productId String?
+  tipo      String   // divergencia_icms, cfop_incorreto, ncm_invalido, cest_obrigatorio, etc.
+  descricao String
+  nivel     String   // info, warning, error
+  detalhes  String?  // JSON
+  createdAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([clientId, chave])
 }
 
 model NfeRecord {

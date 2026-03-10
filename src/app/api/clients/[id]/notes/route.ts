@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth-api";
 import type { NfeRecord } from "@/lib/nfe";
+import { analyzeFiscal } from "@/lib/fiscal-engine";
 
 async function verifyClientAccess(clientId: string, accountId: string) {
   return prisma.client.findFirst({ where: { id: clientId, accountId } });
@@ -108,7 +109,34 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const results = await Promise.allSettled(upserts);
     const saved = results.filter((r) => r.status === "fulfilled").length;
     const duplicateCount = validRecords.filter((r) => existingChaves.has(r.chave)).length;
-    return NextResponse.json({ saved, cnpjMismatchCount, duplicateCount });
+
+    // Motor de análise fiscal: analisar cada nota e persistir alertas
+    const allAlerts: { clientId: string; chave: string; itemIndex: number | null; productId: string | null; tipo: string; descricao: string; nivel: string; detalhes: string | null }[] = [];
+    for (const r of validRecords) {
+      const alerts = analyzeFiscal(r, { cnpj: client.cnpj });
+      for (const a of alerts) {
+        allAlerts.push({
+          clientId,
+          chave: a.chave,
+          itemIndex: a.itemIndex ?? null,
+          productId: a.productId ?? null,
+          tipo: a.tipo,
+          descricao: a.descricao,
+          nivel: a.nivel,
+          detalhes: a.detalhes ? JSON.stringify(a.detalhes) : null,
+        });
+      }
+    }
+    if (allAlerts.length > 0 || chavesToImport.length > 0) {
+      await prisma.fiscalAlert.deleteMany({
+        where: { clientId, chave: { in: chavesToImport } },
+      });
+      if (allAlerts.length > 0) {
+        await prisma.fiscalAlert.createMany({ data: allAlerts });
+      }
+    }
+
+    return NextResponse.json({ saved, cnpjMismatchCount, duplicateCount, fiscalAlertsCount: allAlerts.length });
   } catch (error) {
     console.error("Notes POST error:", error);
     return NextResponse.json({ error: "Erro ao salvar notas" }, { status: 500 });
@@ -133,6 +161,7 @@ export async function DELETE(
     const chave = body.chave as string | undefined;
 
     if (chave) {
+      await prisma.fiscalAlert.deleteMany({ where: { clientId, chave } });
       await prisma.prestacaoIncluida.deleteMany({
         where: { clientId, chave },
       });
@@ -153,6 +182,7 @@ export async function DELETE(
       });
       const chaves = records.map((r) => r.chave);
       if (chaves.length > 0) {
+        await prisma.fiscalAlert.deleteMany({ where: { clientId, chave: { in: chaves } } });
         await prisma.prestacaoIncluida.deleteMany({
           where: { clientId, chave: { in: chaves } },
         });

@@ -157,20 +157,28 @@ export default function NoteDetailsDialog({
             <TableHeader>
               <TableRow>
                 <TableHead>ID produto</TableHead>
-                <TableHead className="text-right">Descrição</TableHead>
-                <TableHead className="text-right">Quantidade</TableHead>
+                <TableHead>Descrição</TableHead>
+                <TableHead>NCM</TableHead>
+                <TableHead>CFOP</TableHead>
+                <TableHead className="text-right">Qtd</TableHead>
+                <TableHead className="text-right">Valor</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {record.itens.map((item, index) => (
                 <TableRow key={`${record.chave}-${index}`}>
                   <TableCell>{item.productId || "-"}</TableCell>
-                  <TableCell className="max-w-[280px] text-right">
-                  <span className="block truncate text-right" title={item.description}>
-                    {item.description}
-                  </span>
-                </TableCell>
+                  <TableCell className="max-w-[200px]">
+                    <span className="block truncate" title={item.description}>
+                      {item.description}
+                    </span>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-slate-600">{item.ncm ?? "-"}</TableCell>
+                  <TableCell className="font-mono text-xs text-slate-600">{item.cfop ?? "-"}</TableCell>
                   <TableCell className="text-right">{item.quantity}</TableCell>
+                  <TableCell className="text-right">
+                    {item.vProd != null && item.vProd > 0 ? formatCurrency(item.vProd) : "-"}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

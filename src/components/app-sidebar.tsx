@@ -10,6 +10,7 @@ import {
   LogOut,
   Settings,
   Shield,
+  ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -30,6 +31,12 @@ const getNavItems = (clientId: string | null, isSuperadmin: boolean) => [
     label: "Documentos fiscais",
     href: clientId ? `/empresas/${clientId}/documentos` : "/empresas",
     isActive: (path: string) => /^\/empresas\/[^/]+\/documentos/.test(path ?? ""),
+  },
+  {
+    icon: ShieldCheck,
+    label: "Auditoria fiscal",
+    href: clientId ? `/empresas/${clientId}/auditoria` : "/empresas",
+    isActive: (path: string) => /^\/empresas\/[^/]+\/auditoria/.test(path ?? ""),
   },
   {
     icon: Building2,
