@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
-import { ArrowUpRight, FileEdit, ListChecks, Loader2, UploadCloud } from "lucide-react";
+import { ArrowUpRight, FileEdit, Loader2, UploadCloud } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +13,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatCnpj, formatCurrency, formatDate, getMonthLabel, parseNfeXml, summarizeItems, type NfeRecord } from "@/lib/nfe";
-import { getExportFields, aggregateItemFields, EXPORT_FIELD_LABELS, type ExportFieldKey } from "@/lib/export-fields";
 import AlertsPanel from "@/components/dashboard/alerts-panel";
 import NoteDetailsDialog from "@/components/dashboard/note-details-dialog";
 import NotesTable, {
@@ -21,7 +20,6 @@ import NotesTable, {
   type NotesTableFilterHandlers,
 } from "@/components/dashboard/notes-table";
 import HeaderEditModal from "@/components/dashboard/header-edit-modal";
-import ExportFieldsModal from "@/components/dashboard/export-fields-modal";
 import PrestacaoPanel from "@/components/dashboard/prestacao-panel";
 import StatsCards from "@/components/dashboard/stats-cards";
 import { TopbarSearch } from "@/components/dashboard/topbar";
@@ -63,7 +61,6 @@ const downloadBlob = (blob: Blob, filename: string) => {
 export default function DocumentosManager() {
   const { selectedClient, refetch } = useClient();
   const [headerModalOpen, setHeaderModalOpen] = useState(false);
-  const [exportFieldsModalOpen, setExportFieldsModalOpen] = useState(false);
   const { confirm } = useConfirm();
   const { records, includedMap, loading: notesLoading, uploadProgress, addRecords, setIncludedMap, updateRecord, deleteRecord, deleteByMonth } = useNotes();
   const [query, setQuery] = useState("");
@@ -227,37 +224,18 @@ export default function DocumentosManager() {
     return { empresa, cnpj, endereco, contato, responsavel, mes };
   };
 
-  const buildExportRows = (forCsv: boolean) => {
-    const enabledFields = getExportFields();
-    const activeKeys = (Object.keys(enabledFields) as ExportFieldKey[]).filter((k) => enabledFields[k]);
-    const labels = activeKeys.length > 0 ? activeKeys.map((k) => EXPORT_FIELD_LABELS[k]) : ["Data", "Chave de acesso", "NF-e/NFC-e", "Valor", "Discriminação dos itens", "Status"];
-    const fallbackFields: Record<ExportFieldKey, boolean> = { data: true, chave: true, numero: true, valor: true, itens: true, status: true, cest: false, ncm: false, cfop: false, baseCalculo: false };
-    const effectiveFields = activeKeys.length > 0 ? enabledFields : fallbackFields;
-
-    const rowToRecord = (r: NfeRecord) => {
-      const agg = aggregateItemFields(r.itens);
-      const record: Record<string, string | number> = {};
-      if (effectiveFields.data) record[EXPORT_FIELD_LABELS.data] = formatDate(r.dataEmissao);
-      if (effectiveFields.chave) record[EXPORT_FIELD_LABELS.chave] = r.chave;
-      if (effectiveFields.numero) record[EXPORT_FIELD_LABELS.numero] = r.numero;
-      if (effectiveFields.valor) record[EXPORT_FIELD_LABELS.valor] = forCsv ? formatCurrency(r.valorTotal) : r.valorTotal;
-      if (effectiveFields.itens) record[EXPORT_FIELD_LABELS.itens] = summarizeItems(r.itens);
-      if (effectiveFields.status) record[EXPORT_FIELD_LABELS.status] = r.status;
-      if (effectiveFields.cest) record[EXPORT_FIELD_LABELS.cest] = agg.cest;
-      if (effectiveFields.ncm) record[EXPORT_FIELD_LABELS.ncm] = agg.ncm;
-      if (effectiveFields.cfop) record[EXPORT_FIELD_LABELS.cfop] = agg.cfop;
-      if (effectiveFields.baseCalculo) record[EXPORT_FIELD_LABELS.baseCalculo] = forCsv ? formatCurrency(agg.baseCalculo) : agg.baseCalculo;
-      return record;
-    };
-
-    return { labels, rowToRecord };
-  };
-
   const exportCsv = () => {
     const { empresa, cnpj, endereco, contato, responsavel, mes } = getExportHeader();
     const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
-    const { labels, rowToRecord } = buildExportRows(true);
-    const rows = exportSource.map((r) => rowToRecord(r));
+    const rows = exportSource.map((r) => ({
+      Data: formatDate(r.dataEmissao),
+      "Chave de acesso": r.chave,
+      "NF-e/NFC-e": r.numero,
+      Valor: formatCurrency(r.valorTotal),
+      "Discriminação dos itens": summarizeItems(r.itens),
+      Status: r.status,
+    }));
+    const headers = Object.keys(rows[0] ?? {});
     const headerBlock = [
       `EMPRESA;${empresa}`,
       `CNPJ;${cnpj}`,
@@ -267,7 +245,7 @@ export default function DocumentosManager() {
       `MÊS;${mes.toUpperCase()}`,
       "",
     ].join("\n");
-    const tableRows = [labels.join(";"), ...rows.map((row) => labels.map((h) => `"${String(row[h] ?? "").replace(/"/g, '""')}"`).join(";"))];
+    const tableRows = [headers.join(";"), ...rows.map((row) => headers.map((h) => `"${String(row[h as keyof typeof row] ?? "").replace(/"/g, '""')}"`).join(";"))];
     const totalBlock = [
       "",
       `VALOR TOTAL DA VENDA DO MÊS: ${mes.toUpperCase()};${formatCurrency(totalVal)}`,
@@ -279,9 +257,14 @@ export default function DocumentosManager() {
   const exportXlsx = () => {
     const { empresa, cnpj, endereco, contato, responsavel, mes } = getExportHeader();
     const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
-    const { labels, rowToRecord } = buildExportRows(false);
-    const rows = exportSource.map((r) => rowToRecord(r));
-    const colCount = labels.length;
+    const rows = exportSource.map((r) => ({
+      Data: formatDate(r.dataEmissao),
+      "Chave de acesso": r.chave,
+      "NF-e/NFC-e": r.numero,
+      Valor: r.valorTotal,
+      "Discriminação dos itens": summarizeItems(r.itens),
+      Status: r.status,
+    }));
     const headerData = [
       ["EMPRESA", empresa],
       ["CNPJ", cnpj],
@@ -290,10 +273,10 @@ export default function DocumentosManager() {
       ["RESPONSÁVEL", responsavel],
       ["MÊS", mes.toUpperCase()],
       [],
-      labels,
+      ["Data", "Chave de acesso", "NF-e/NFC-e", "Valor", "Discriminação dos itens", "Status"],
     ];
-    const dataRows = rows.map((r) => labels.map((h) => r[h] ?? ""));
-    const totalRow = [["VALOR TOTAL DA VENDA DO MÊS: " + mes.toUpperCase(), formatCurrency(totalVal), ...Array(colCount - 2).fill("")]];
+    const dataRows = rows.map((r) => [r.Data, r["Chave de acesso"], r["NF-e/NFC-e"], r.Valor, r["Discriminação dos itens"], r.Status]);
+    const totalRow = [["VALOR TOTAL DA VENDA DO MÊS: " + mes.toUpperCase(), formatCurrency(totalVal), "", "", "", ""]];
     const allData = [...headerData, ...dataRows, ...totalRow];
     const ws = XLSX.utils.aoa_to_sheet(allData);
     const wb = XLSX.utils.book_new();
@@ -304,8 +287,7 @@ export default function DocumentosManager() {
   const exportPdf = () => {
     const { empresa, cnpj, endereco, contato, responsavel, mes } = getExportHeader();
     const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
-    const { labels, rowToRecord } = buildExportRows(true);
-    const rows = exportSource.map((r) => rowToRecord(r));
+    const rows = exportSource.map((r) => ({ data: formatDate(r.dataEmissao), chave: r.chave, numero: r.numero, valor: formatCurrency(r.valorTotal), itens: summarizeItems(r.itens) }));
     const escapeHtml = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     const headerHtml = `
       <div style="margin-bottom:20px;font-size:12px;line-height:1.6">
@@ -324,9 +306,7 @@ export default function DocumentosManager() {
         VALOR TOTAL DA VENDA DO MÊS: ${escapeHtml(mes.toUpperCase())} — ${escapeHtml(formatCurrency(totalVal))}
       </p>
     `;
-    const thCells = labels.map((l) => `<th>${escapeHtml(l)}</th>`).join("");
-    const trCells = rows.map((r) => `<tr>${labels.map((h) => `<td>${escapeHtml(String(r[h] ?? ""))}</td>`).join("")}</tr>`).join("");
-    const html = `<!DOCTYPE html><html><head><title>Prestação de contas</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Prestação de contas - notas fiscais</h1>${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${trCells}</tbody></table>${totalHtml}</body></html>`;
+    const html = `<!DOCTYPE html><html><head><title>Prestação de contas</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Prestação de contas - notas fiscais</h1>${headerHtml}<table><thead><tr><th>Data</th><th>Chave de acesso</th><th>NF-e/NFC-e</th><th>Valor</th><th>Discriminação dos itens</th><th>Status</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${escapeHtml(r.data)}</td><td>${escapeHtml(r.chave)}</td><td>${escapeHtml(r.numero)}</td><td>${escapeHtml(r.valor)}</td><td>${escapeHtml(r.itens)}</td><td>Autorizada</td></tr>`).join("")}</tbody></table>${totalHtml}</body></html>`;
     const w = window.open("", "_blank");
     if (!w) return;
     w.document.write(html);
@@ -421,15 +401,6 @@ export default function DocumentosManager() {
               <FileEdit className="size-4" />
               Editar cabeçalho
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={() => setExportFieldsModalOpen(true)}
-            >
-              <ListChecks className="size-4" />
-              Campos da exportação
-            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button className="gap-2" disabled={filteredRecords.length === 0}>
@@ -519,10 +490,6 @@ export default function DocumentosManager() {
         open={headerModalOpen}
         onOpenChange={setHeaderModalOpen}
         onSaved={refetch}
-      />
-      <ExportFieldsModal
-        open={exportFieldsModalOpen}
-        onOpenChange={setExportFieldsModalOpen}
       />
     </div>
   );
