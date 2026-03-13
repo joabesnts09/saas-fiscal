@@ -7,22 +7,30 @@ async function verifyClientAccess(clientId: string, accountId: string) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await getAuthFromRequest(_request);
+    const auth = await getAuthFromRequest(request);
     const accountId = auth?.accountId;
     if (!accountId) return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
     const { id: clientId } = await params;
     const client = await verifyClientAccess(clientId, accountId);
     if (!client) return NextResponse.json({ error: "Cliente não encontrado" }, { status: 404 });
 
+    const { searchParams } = new URL(request.url);
+    const mes = searchParams.get("mes")?.trim();
+    const ano = searchParams.get("ano")?.trim();
+    const mesFilter = mes && /^\d{4}-\d{2}$/.test(mes) ? mes : null;
+    const anoFilter = ano && /^\d{4}$/.test(ano) ? ano : null;
+    const periodFilter = mesFilter ?? anoFilter;
+
     const notes = await prisma.nfeRecord.findMany({
       where: { clientId },
       select: { itensJson: true, tipo: true, dataEmissao: true },
     });
 
+    let notesCount = 0;
     let totalICMS = 0;
     let vendaCount = 0;
     let compraCount = 0;
@@ -36,11 +44,16 @@ export async function GET(
     const ncmCountsFull: Record<string, number> = {};
 
     for (const note of notes) {
-      if (note.tipo === "venda") vendaCount++;
-      else if (note.tipo === "compra") compraCount++;
-
       const dataEmissao = note.dataEmissao ?? "";
       const monthKey = dataEmissao.length >= 7 ? dataEmissao.slice(0, 7) : "";
+      const yearKey = dataEmissao.length >= 4 ? dataEmissao.slice(0, 4) : "";
+      const matchesPeriod = !periodFilter || (mesFilter && monthKey === mesFilter) || (anoFilter && yearKey === anoFilter);
+
+      if (matchesPeriod) {
+        notesCount++;
+        if (note.tipo === "venda") vendaCount++;
+        else if (note.tipo === "compra") compraCount++;
+      }
 
       const itens = (() => {
         try {
@@ -57,18 +70,22 @@ export async function GET(
       })();
 
       for (const item of itens) {
+        const vICMS = item.vICMS ?? 0;
+
+        if (monthKey && (!anoFilter || monthKey.startsWith(anoFilter))) {
+          icmsByMonth[monthKey] = (icmsByMonth[monthKey] ?? 0) + vICMS;
+        }
+
+        if (!matchesPeriod) continue;
+
         itemsCount++;
         const hasFiscal = !!(item.ncm || item.cfop || (item.vICMS != null && item.vICMS > 0) || (item.vPIS != null && item.vPIS > 0) || (item.vCOFINS != null && item.vCOFINS > 0));
         if (hasFiscal) itemsWithFiscalData++;
 
-        const vICMS = item.vICMS ?? 0;
         totalICMS += vICMS;
         totalPIS += item.vPIS ?? 0;
         totalCOFINS += item.vCOFINS ?? 0;
 
-        if (monthKey) {
-          icmsByMonth[monthKey] = (icmsByMonth[monthKey] ?? 0) + vICMS;
-        }
         if (item.cfop) {
           cfopCounts[item.cfop] = (cfopCounts[item.cfop] ?? 0) + 1;
         }
@@ -92,11 +109,12 @@ export async function GET(
       .map(([ncm, count]) => ({ ncm, count }));
 
     const icmsByMonthList = Object.entries(icmsByMonth)
+      .filter(([mes]) => !anoFilter || mes.startsWith(anoFilter))
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([mes, valor]) => ({ mes, valor }));
 
     return NextResponse.json({
-      notesCount: notes.length,
+      notesCount,
       vendaCount,
       compraCount,
       itemsCount,

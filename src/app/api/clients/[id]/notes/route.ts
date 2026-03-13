@@ -219,6 +219,7 @@ export async function DELETE(
 
     const { searchParams } = new URL(request.url);
     const month = searchParams.get("month"); // YYYY-MM
+    const year = searchParams.get("year"); // YYYY
     const body = await request.json().catch(() => ({}));
     const chave = body.chave as string | undefined;
 
@@ -233,8 +234,13 @@ export async function DELETE(
       return NextResponse.json({ deleted: 1 });
     }
 
-    if (month && /^\d{4}-\d{2}$/.test(month)) {
-      const prefix = `${month}-`;
+    const prefix = month && /^\d{4}-\d{2}$/.test(month)
+      ? `${month}-`
+      : year && /^\d{4}$/.test(year)
+        ? year
+        : null;
+
+    if (prefix) {
       const records = await prisma.nfeRecord.findMany({
         where: {
           clientId,
@@ -256,7 +262,7 @@ export async function DELETE(
     }
 
     return NextResponse.json(
-      { error: "Informe chave (body) ou month (query: ?month=YYYY-MM)" },
+      { error: "Informe chave (body), month (?month=YYYY-MM) ou year (?year=YYYY)" },
       { status: 400 }
     );
   } catch (error) {

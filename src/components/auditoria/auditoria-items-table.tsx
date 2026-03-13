@@ -121,16 +121,21 @@ export default function AuditoriaItemsTable({
       });
     }
 
-    const search = itemSearch.trim().replace(/\D/g, "");
-    if (!search || search.length < 2) return items;
+    const searchTerms = itemSearch
+      .split(",")
+      .map((s) => s.trim().replace(/\D/g, ""))
+      .filter((s) => s.length >= 2);
+    if (searchTerms.length === 0) return items;
     return items.filter(({ item }) => {
       const ncm = (item.ncm ?? "").replace(/\D/g, "");
       const cest = (item.cest ?? "").replace(/\D/g, "");
       const cfop = (item.cfop ?? "").replace(/\D/g, "");
-      const matchNcm = ncm && (ncm.includes(search) || search.includes(ncm));
-      const matchCest = cest && (cest.includes(search) || search.includes(cest));
-      const matchCfop = cfop && (cfop.includes(search) || search.includes(cfop));
-      return matchNcm || matchCest || matchCfop;
+      return searchTerms.some((search) => {
+        const matchNcm = ncm && (ncm.includes(search) || search.includes(ncm));
+        const matchCest = cest && (cest.includes(search) || search.includes(cest));
+        const matchCfop = cfop && (cfop.includes(search) || search.includes(cfop));
+        return matchNcm || matchCest || matchCfop;
+      });
     });
   }, [flatItems, itemSearch, tipoFilter, clientCnpj]);
 
@@ -175,9 +180,17 @@ export default function AuditoriaItemsTable({
 
   return (
     <Card className="border-slate-200 shadow-sm">
-      <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <CardTitle>Análise por itens</CardTitle>
-        <div className="flex flex-wrap items-center gap-2">
+      <CardHeader className="space-y-4">
+        <div className="flex items-center gap-4 w-full min-w-0">
+          <CardTitle className="shrink-0">Análise por itens</CardTitle>
+          <Input
+            placeholder="Buscar NCM, CEST ou CFOP — separar por vírgula para múltiplos (Ex: 6102, 5405 ou 28043000, 1200300)"
+            className="flex-1 min-w-0 font-mono text-sm"
+            value={itemSearch}
+            onChange={(e) => setItemSearch(e.target.value)}
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-2 justify-end">
           <label className="text-xs text-slate-500">Operação</label>
           <Select value={tipoFilter} onValueChange={(v) => setTipoFilter(v as "all" | "compra" | "venda")}>
             <SelectTrigger className="w-[140px]">
@@ -189,13 +202,6 @@ export default function AuditoriaItemsTable({
               <SelectItem value="venda">Venda</SelectItem>
             </SelectContent>
           </Select>
-          <label className="text-xs text-slate-500">Buscar NCM, CEST ou CFOP</label>
-          <Input
-            placeholder="Ex: 28043000, 1200300, 6102"
-            className="w-[240px] font-mono text-sm"
-            value={itemSearch}
-            onChange={(e) => setItemSearch(e.target.value)}
-          />
           {onDeleteMonth && (
             <Button
               variant="outline"

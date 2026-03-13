@@ -30,6 +30,7 @@ type NotesContextType = {
   updateRecord: (chave: string, record: Partial<NfeRecord>) => Promise<void>;
   deleteRecord: (chave: string) => Promise<boolean>;
   deleteByMonth: (month: string) => Promise<number>;
+  deleteByYear: (year: string) => Promise<number>;
   updateIncluded: (chave: string, value: boolean) => void;
   refetch: () => Promise<void>;
 };
@@ -187,6 +188,28 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     [selectedClient?.id, fetchNotes]
   );
 
+  const deleteByYear = useCallback(
+    async (year: string): Promise<number> => {
+      if (!selectedClient?.id) return 0;
+      try {
+        const res = await fetch(
+          `/api/clients/${selectedClient.id}/notes?year=${encodeURIComponent(year)}`,
+          { method: "DELETE", headers: getAuthHeaders(), credentials: "include" }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const count = data.deleted ?? 0;
+          await fetchNotes();
+          return count;
+        }
+      } catch (e) {
+        console.error("Erro ao excluir notas do ano:", e);
+      }
+      return 0;
+    },
+    [selectedClient?.id, fetchNotes]
+  );
+
   const syncPrestacao = useCallback((map: Record<string, boolean>) => {
     if (!selectedClient?.id) return;
     const chaves = Object.keys(map).filter((k) => map[k]);
@@ -226,6 +249,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
         updateRecord,
         deleteRecord,
         deleteByMonth,
+        deleteByYear,
         updateIncluded,
         refetch: fetchNotes,
       }}
