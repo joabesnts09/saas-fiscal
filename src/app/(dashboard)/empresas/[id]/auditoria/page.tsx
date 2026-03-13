@@ -433,7 +433,7 @@ export default function AuditoriaFiscalPage() {
         endereco: client?.endereco?.trim() || "—",
         contato: client?.contato?.trim() || "—",
         responsavel: client?.responsavel?.trim() || "—",
-        periodo: `Busca: ${periodo}`,
+        periodo,
       };
       const rowsRaw = filteredRecords.flatMap((r) => getRecordRowsByItem(r, exportFields, client?.cnpj));
       const headers = Object.keys(rows[0] ?? {});
@@ -448,7 +448,7 @@ export default function AuditoriaFiscalPage() {
           "",
         ].join("\n");
         const tableRows = [headers.join(";"), ...rows.map((row) => headers.map((h) => `"${String(row[h as keyof typeof row] ?? "").replace(/"/g, '""')}"`).join(";"))];
-        const totalBlock = ["", `VALOR TOTAL (itens da busca): ${formatCurrency(totalVal)}`].join("\n");
+        const totalBlock = ["", `VALOR TOTAL: ${periodo};${formatCurrency(totalVal)}`].join("\n");
         downloadBlob(new Blob(["\ufeff", [headerBlock, ...tableRows, totalBlock].join("\n")], { type: "text/csv;charset=utf-8;" }), "notas-auditoria-busca.csv");
       } else if (format === "xlsx") {
         const headerData = [
@@ -462,18 +462,18 @@ export default function AuditoriaFiscalPage() {
           headers,
         ];
         const dataRows = rowsRaw.map((r) => headers.map((h) => r[h] ?? ""));
-        const totalRow = [[`VALOR TOTAL (itens da busca)`, formatCurrency(totalVal), ...Array(Math.max(0, headers.length - 2)).fill("")] as (string | number)[]];
+        const totalRow = [[`VALOR TOTAL: ${periodo}`, formatCurrency(totalVal), ...Array(Math.max(0, headers.length - 2)).fill("")] as (string | number)[]];
         const ws = XLSX.utils.aoa_to_sheet([...headerData, ...dataRows, ...totalRow]);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Busca");
+        XLSX.utils.book_append_sheet(wb, ws, "Auditoria");
         downloadBlob(new Blob([XLSX.write(wb, { type: "array", bookType: "xlsx" })], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), "notas-auditoria-busca.xlsx");
       } else {
         const escapeHtml = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
         const headerHtml = `<div style="margin-bottom:20px;font-size:12px;line-height:1.6"><p><strong>EMPRESA:</strong> ${escapeHtml(headerBase.empresa)}</p><p><strong>CNPJ:</strong> ${escapeHtml(headerBase.cnpj)}</p><p><strong>ENDEREÇO:</strong> ${escapeHtml(headerBase.endereco)}</p><p><strong>CONTATO:</strong> ${escapeHtml(headerBase.contato)}</p><p><strong>RESPONSÁVEL:</strong> ${escapeHtml(headerBase.responsavel)}</p><p><strong>PERÍODO:</strong> ${escapeHtml(headerBase.periodo)}</p></div><hr style="border:1px solid #ddd;margin:12px 0" />`;
-        const totalHtml = `<hr style="border:1px solid #ddd;margin:16px 0" /><p style="background:#e5e5e5;padding:10px;font-weight:bold;margin:0">VALOR TOTAL (itens da busca): ${escapeHtml(formatCurrency(totalVal))}</p>`;
+        const totalHtml = `<hr style="border:1px solid #ddd;margin:16px 0" /><p style="background:#e5e5e5;padding:10px;font-weight:bold;margin:0">VALOR TOTAL: ${escapeHtml(periodo)} — ${escapeHtml(formatCurrency(totalVal))}</p>`;
         const thCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
         const bodyRows = rows.map((r) => `<tr>${headers.map((h) => `<td>${escapeHtml(String(r[h] ?? "")).replace(/\n/g, "<br />")}</td>`).join("")}</tr>`).join("");
-        const html = `<!DOCTYPE html><html><head><title>Notas - Busca</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Notas fiscais - Resultados da busca</h1>${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>${totalHtml}</body></html>`;
+        const html = `<!DOCTYPE html><html><head><title>Notas - Auditoria</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Notas fiscais - Auditoria</h1>${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>${totalHtml}</body></html>`;
         const w = window.open("", "_blank");
         if (!w) return;
         w.document.write(html);
