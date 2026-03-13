@@ -84,6 +84,24 @@ function getYearsFromRecords(records: NfeRecord[]): { value: string; label: stri
     .map((value) => ({ value, label: value }));
 }
 
+function getMonthsFromRecords(records: NfeRecord[]): { value: string; label: string }[] {
+  const monthSet = new Set<string>();
+  for (const r of records) {
+    const d = r.dataEmissao?.trim();
+    if (!d || d.length < 7) continue;
+    const yyyyMm = d.slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(yyyyMm)) monthSet.add(yyyyMm);
+  }
+  return Array.from(monthSet)
+    .sort((a, b) => b.localeCompare(a))
+    .map((value) => {
+      const [y, m] = value.split("-");
+      const d = new Date(Number(y), Number(m) - 1, 1);
+      const label = d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+      return { value, label: label.charAt(0).toUpperCase() + label.slice(1) };
+    });
+}
+
 type FiscalAlertRow = {
   id: string;
   chave: string;
@@ -103,6 +121,7 @@ const TIPO_LABEL: Record<string, string> = {
   cest_obrigatorio: "CEST obrigatório",
   cst_icms_incompativel: "CST/ICMS incompatível",
   bebida_icms_zerado: "Bebida com ICMS zerado",
+  cfop_invalido: "CFOP inválido",
   cfop_incompativel: "CFOP incompatível",
   pis_cofins_zerado: "PIS/COFINS zerado",
 };
@@ -126,7 +145,7 @@ export default function AuditoriaFiscalPage() {
   const clientId = params?.id as string | undefined;
   const { clients, selectedClient, refetch } = useClient();
   const client = selectedClient ?? clients.find((c) => c.id === clientId) ?? null;
-  const { addRecords, uploadProgress, deleteByYear } = useNotes();
+  const { addRecords, uploadProgress, deleteByMonth } = useNotes();
   const { confirm } = useConfirm();
 
   const [headerModalOpen, setHeaderModalOpen] = useState(false);
@@ -152,7 +171,8 @@ export default function AuditoriaFiscalPage() {
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
-  const [deleteYearLoading, setDeleteYearLoading] = useState(false);
+  const [deleteMonthLoading, setDeleteMonthLoading] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState("");
   const [nivelFilter, setNivelFilter] = useState<string>("all");
   const [notaTipoFilter, setNotaTipoFilter] = useState<string>("all");
 
@@ -178,7 +198,8 @@ export default function AuditoriaFiscalPage() {
     if (!clientId) return;
     try {
       const url = new URL(`/api/clients/${clientId}/fiscal-stats`, window.location.origin);
-      if (selectedYear) url.searchParams.set("ano", selectedYear);
+      if (selectedMonth) url.searchParams.set("mes", selectedMonth);
+      else if (selectedYear) url.searchParams.set("ano", selectedYear);
       const res = await fetch(url.toString(), {
         headers: getAuthHeaders(),
         credentials: "include",
@@ -192,7 +213,7 @@ export default function AuditoriaFiscalPage() {
     } catch {
       setStats(null);
     }
-  }, [clientId, selectedYear]);
+  }, [clientId, selectedYear, selectedMonth]);
 
   const fetchAlerts = useCallback(async () => {
     if (!clientId) return;
@@ -257,7 +278,7 @@ export default function AuditoriaFiscalPage() {
       }
       if (parsed.length > 0) {
         await addRecords(parsed);
-        await fetchNotes();
+        await Promise.all([fetchNotes(), fetchAlerts(), fetchStats()]);
         toast.success(`${parsed.length} nota(s) importada(s).`);
       }
     } catch (e) {
@@ -275,6 +296,15 @@ export default function AuditoriaFiscalPage() {
       return d.length >= 4 && d.startsWith(selectedYear);
     });
   }, [notes, selectedYear]);
+
+  const monthOptions = useMemo(() => getMonthsFromRecords(yearFilteredNotes), [yearFilteredNotes]);
+  const monthFilteredNotes = useMemo(() => {
+    if (!selectedMonth) return yearFilteredNotes;
+    return yearFilteredNotes.filter((r) => {
+      const d = r.dataEmissao?.trim() ?? "";
+      return d.length >= 7 && d.startsWith(selectedMonth);
+    });
+  }, [yearFilteredNotes, selectedMonth]);
 
   const fetchExportConfig = useCallback(async () => {
     if (!clientId) return;
@@ -306,18 +336,27 @@ export default function AuditoriaFiscalPage() {
     }
   }, [yearOptions, selectedYear]);
 
+  useEffect(() => {
+    if (monthOptions.length > 0 && !monthOptions.some((o) => o.value === selectedMonth)) {
+      setSelectedMonth(monthOptions[0]!.value);
+    } else if (monthOptions.length === 0) {
+      setSelectedMonth("");
+    }
+  }, [monthOptions, selectedMonth]);
+
+  const displayNotes = selectedMonth ? monthFilteredNotes : yearFilteredNotes;
   const getExportHeader = (source: NfeRecord[]) => ({
     empresa: client?.name ?? "—",
     cnpj: formatCnpj(client?.cnpj ?? null),
     endereco: client?.endereco?.trim() || "—",
     contato: client?.contato?.trim() || "—",
     responsavel: client?.responsavel?.trim() || "—",
-    ano: selectedYear ?? "",
+    periodo: selectedMonth ? (monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth) : (selectedYear ?? ""),
   });
 
   const exportCsv = () => {
-    const exportSource = yearFilteredNotes;
-    const { empresa, cnpj, endereco, contato, responsavel, ano } = getExportHeader(exportSource);
+    const exportSource = displayNotes;
+    const { empresa, cnpj, endereco, contato, responsavel, periodo } = getExportHeader(exportSource);
     const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
     const rows = exportSource.flatMap((r) => getRecordRowsByItemFormatted(r, exportFields, client?.cnpj));
     const headers = Object.keys(rows[0] ?? {});
@@ -327,17 +366,17 @@ export default function AuditoriaFiscalPage() {
       `ENDEREÇO;${endereco}`,
       `CONTATO;${contato}`,
       `RESPONSÁVEL;${responsavel}`,
-      `ANO;${ano}`,
+      `PERÍODO;${periodo}`,
       "",
     ].join("\n");
     const tableRows = [headers.join(";"), ...rows.map((row) => headers.map((h) => `"${String(row[h as keyof typeof row] ?? "").replace(/"/g, '""')}"`).join(";"))];
-    const totalBlock = ["", `VALOR TOTAL DO ANO: ${ano};${formatCurrency(totalVal)}`].join("\n");
+    const totalBlock = ["", `VALOR TOTAL: ${periodo};${formatCurrency(totalVal)}`].join("\n");
     downloadBlob(new Blob(["\ufeff", [headerBlock, ...tableRows, totalBlock].join("\n")], { type: "text/csv;charset=utf-8;" }), "notas-auditoria.csv");
   };
 
   const exportXlsx = () => {
-    const exportSource = yearFilteredNotes;
-    const { empresa, cnpj, endereco, contato, responsavel, ano } = getExportHeader(exportSource);
+    const exportSource = displayNotes;
+    const { empresa, cnpj, endereco, contato, responsavel, periodo } = getExportHeader(exportSource);
     const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
     const rows = exportSource.flatMap((r) => getRecordRowsByItem(r, exportFields, client?.cnpj));
     const headers = Object.keys(rows[0] ?? {});
@@ -347,12 +386,12 @@ export default function AuditoriaFiscalPage() {
       ["ENDEREÇO", endereco],
       ["CONTATO", contato],
       ["RESPONSÁVEL", responsavel],
-      ["ANO", ano],
+      ["PERÍODO", periodo],
       [],
       headers,
     ];
     const dataRows = rows.map((r) => headers.map((h) => r[h] ?? ""));
-    const totalRow = [[`VALOR TOTAL DO ANO: ${ano}`, formatCurrency(totalVal), ...Array(Math.max(0, headers.length - 2)).fill("")] as (string | number)[]];
+    const totalRow = [[`VALOR TOTAL: ${periodo}`, formatCurrency(totalVal), ...Array(Math.max(0, headers.length - 2)).fill("")] as (string | number)[]];
     const ws = XLSX.utils.aoa_to_sheet([...headerData, ...dataRows, ...totalRow]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Notas");
@@ -360,14 +399,14 @@ export default function AuditoriaFiscalPage() {
   };
 
   const exportPdf = () => {
-    const exportSource = yearFilteredNotes;
-    const { empresa, cnpj, endereco, contato, responsavel, ano } = getExportHeader(exportSource);
+    const exportSource = displayNotes;
+    const { empresa, cnpj, endereco, contato, responsavel, periodo } = getExportHeader(exportSource);
     const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
     const rows = exportSource.flatMap((r) => getRecordRowsByItemFormatted(r, exportFields, client?.cnpj));
     const headers = Object.keys(rows[0] ?? {});
     const escapeHtml = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-    const headerHtml = `<div style="margin-bottom:20px;font-size:12px;line-height:1.6"><p><strong>EMPRESA:</strong> ${escapeHtml(empresa)}</p><p><strong>CNPJ:</strong> ${escapeHtml(cnpj)}</p><p><strong>ENDEREÇO:</strong> ${escapeHtml(endereco)}</p><p><strong>CONTATO:</strong> ${escapeHtml(contato)}</p><p><strong>RESPONSÁVEL:</strong> ${escapeHtml(responsavel)}</p><p><strong>ANO:</strong> ${escapeHtml(ano)}</p></div><hr style="border:1px solid #ddd;margin:12px 0" />`;
-    const totalHtml = `<hr style="border:1px solid #ddd;margin:16px 0" /><p style="background:#e5e5e5;padding:10px;font-weight:bold;margin:0">VALOR TOTAL DO ANO: ${escapeHtml(ano)} — ${escapeHtml(formatCurrency(totalVal))}</p>`;
+    const headerHtml = `<div style="margin-bottom:20px;font-size:12px;line-height:1.6"><p><strong>EMPRESA:</strong> ${escapeHtml(empresa)}</p><p><strong>CNPJ:</strong> ${escapeHtml(cnpj)}</p><p><strong>ENDEREÇO:</strong> ${escapeHtml(endereco)}</p><p><strong>CONTATO:</strong> ${escapeHtml(contato)}</p><p><strong>RESPONSÁVEL:</strong> ${escapeHtml(responsavel)}</p><p><strong>PERÍODO:</strong> ${escapeHtml(periodo)}</p></div><hr style="border:1px solid #ddd;margin:12px 0" />`;
+    const totalHtml = `<hr style="border:1px solid #ddd;margin:16px 0" /><p style="background:#e5e5e5;padding:10px;font-weight:bold;margin:0">VALOR TOTAL: ${escapeHtml(periodo)} — ${escapeHtml(formatCurrency(totalVal))}</p>`;
     const thCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
     const bodyRows = rows.map((r) => `<tr>${headers.map((h) => `<td>${escapeHtml(String(r[h] ?? "")).replace(/\n/g, "<br />")}</td>`).join("")}</tr>`).join("");
     const html = `<!DOCTYPE html><html><head><title>Notas - Auditoria</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Notas fiscais - Auditoria</h1>${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>${totalHtml}</body></html>`;
@@ -379,29 +418,98 @@ export default function AuditoriaFiscalPage() {
     w.print();
   };
 
-  const handleDeleteYear = useCallback(async () => {
-    if (!selectedYear) return;
+  const handleExportFiltered = useCallback(
+    (filteredRecords: NfeRecord[], format: "csv" | "xlsx" | "pdf") => {
+      if (filteredRecords.length === 0) {
+        toast.error("Nenhum item para exportar.");
+        return;
+      }
+      const periodo = selectedMonth ? (monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth) : (selectedYear ?? "");
+      const rows = filteredRecords.flatMap((r) => getRecordRowsByItemFormatted(r, exportFields, client?.cnpj));
+      const totalVal = filteredRecords.reduce((a, r) => a + r.itens.reduce((s, i) => s + (i.vProd ?? 0), 0), 0);
+      const headerBase = {
+        empresa: client?.name ?? "—",
+        cnpj: formatCnpj(client?.cnpj ?? null),
+        endereco: client?.endereco?.trim() || "—",
+        contato: client?.contato?.trim() || "—",
+        responsavel: client?.responsavel?.trim() || "—",
+        periodo: `Busca: ${periodo}`,
+      };
+      const rowsRaw = filteredRecords.flatMap((r) => getRecordRowsByItem(r, exportFields, client?.cnpj));
+      const headers = Object.keys(rows[0] ?? {});
+      if (format === "csv") {
+        const headerBlock = [
+          `EMPRESA;${headerBase.empresa}`,
+          `CNPJ;${headerBase.cnpj}`,
+          `ENDEREÇO;${headerBase.endereco}`,
+          `CONTATO;${headerBase.contato}`,
+          `RESPONSÁVEL;${headerBase.responsavel}`,
+          `PERÍODO;${headerBase.periodo}`,
+          "",
+        ].join("\n");
+        const tableRows = [headers.join(";"), ...rows.map((row) => headers.map((h) => `"${String(row[h as keyof typeof row] ?? "").replace(/"/g, '""')}"`).join(";"))];
+        const totalBlock = ["", `VALOR TOTAL (itens da busca): ${formatCurrency(totalVal)}`].join("\n");
+        downloadBlob(new Blob(["\ufeff", [headerBlock, ...tableRows, totalBlock].join("\n")], { type: "text/csv;charset=utf-8;" }), "notas-auditoria-busca.csv");
+      } else if (format === "xlsx") {
+        const headerData = [
+          ["EMPRESA", headerBase.empresa],
+          ["CNPJ", headerBase.cnpj],
+          ["ENDEREÇO", headerBase.endereco],
+          ["CONTATO", headerBase.contato],
+          ["RESPONSÁVEL", headerBase.responsavel],
+          ["PERÍODO", headerBase.periodo],
+          [],
+          headers,
+        ];
+        const dataRows = rowsRaw.map((r) => headers.map((h) => r[h] ?? ""));
+        const totalRow = [[`VALOR TOTAL (itens da busca)`, formatCurrency(totalVal), ...Array(Math.max(0, headers.length - 2)).fill("")] as (string | number)[]];
+        const ws = XLSX.utils.aoa_to_sheet([...headerData, ...dataRows, ...totalRow]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Busca");
+        downloadBlob(new Blob([XLSX.write(wb, { type: "array", bookType: "xlsx" })], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), "notas-auditoria-busca.xlsx");
+      } else {
+        const escapeHtml = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        const headerHtml = `<div style="margin-bottom:20px;font-size:12px;line-height:1.6"><p><strong>EMPRESA:</strong> ${escapeHtml(headerBase.empresa)}</p><p><strong>CNPJ:</strong> ${escapeHtml(headerBase.cnpj)}</p><p><strong>ENDEREÇO:</strong> ${escapeHtml(headerBase.endereco)}</p><p><strong>CONTATO:</strong> ${escapeHtml(headerBase.contato)}</p><p><strong>RESPONSÁVEL:</strong> ${escapeHtml(headerBase.responsavel)}</p><p><strong>PERÍODO:</strong> ${escapeHtml(headerBase.periodo)}</p></div><hr style="border:1px solid #ddd;margin:12px 0" />`;
+        const totalHtml = `<hr style="border:1px solid #ddd;margin:16px 0" /><p style="background:#e5e5e5;padding:10px;font-weight:bold;margin:0">VALOR TOTAL (itens da busca): ${escapeHtml(formatCurrency(totalVal))}</p>`;
+        const thCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
+        const bodyRows = rows.map((r) => `<tr>${headers.map((h) => `<td>${escapeHtml(String(r[h] ?? "")).replace(/\n/g, "<br />")}</td>`).join("")}</tr>`).join("");
+        const html = `<!DOCTYPE html><html><head><title>Notas - Busca</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Notas fiscais - Resultados da busca</h1>${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>${totalHtml}</body></html>`;
+        const w = window.open("", "_blank");
+        if (!w) return;
+        w.document.write(html);
+        w.document.close();
+        w.focus();
+        w.print();
+      }
+      toast.success(`Exportado: ${filteredRecords.length} nota(s), ${rows.length} item(ns).`);
+    },
+    [client, selectedMonth, selectedYear, monthOptions, exportFields]
+  );
+
+  const handleDeleteMonth = useCallback(async () => {
+    if (!selectedMonth) return;
+    const monthLabel = monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth;
     const confirmed = await confirm({
-      title: "Excluir notas do ano",
-      description: `Excluir todas as notas de ${selectedYear}? Você poderá fazer o upload dos XMLs novamente. Esta ação não pode ser desfeita.`,
+      title: "Excluir notas do mês",
+      description: `Excluir todas as notas de ${monthLabel}? Você poderá fazer o upload dos XMLs novamente. Esta ação não pode ser desfeita.`,
       confirmLabel: "Excluir",
       variant: "destructive",
     });
     if (!confirmed) return;
-    setDeleteYearLoading(true);
+    setDeleteMonthLoading(true);
     try {
-      const count = await deleteByYear(selectedYear);
+      const count = await deleteByMonth(selectedMonth);
       await fetchNotes();
       await fetchAlerts();
       await fetchStats();
-      toast.success(count > 0 ? `${count} nota(s) excluída(s). Faça o upload dos XMLs novamente.` : "Nenhuma nota encontrada para este ano.");
+      toast.success(count > 0 ? `${count} nota(s) excluída(s). Faça o upload dos XMLs novamente.` : "Nenhuma nota encontrada para este mês.");
     } catch (e) {
       toast.error("Erro ao excluir notas.");
       console.error(e);
     } finally {
-      setDeleteYearLoading(false);
+      setDeleteMonthLoading(false);
     }
-  }, [selectedYear, confirm, deleteByYear, fetchNotes, fetchAlerts, fetchStats]);
+  }, [selectedMonth, monthOptions, confirm, deleteByMonth, fetchNotes, fetchAlerts, fetchStats]);
 
   useEffect(() => {
     if (!clientId) return;
@@ -412,12 +520,13 @@ export default function AuditoriaFiscalPage() {
   useEffect(() => {
     if (!clientId) return;
     fetchStats();
-  }, [clientId, selectedYear, fetchStats]);
+  }, [clientId, selectedYear, selectedMonth, fetchStats]);
 
-  const alertsForYear = useMemo(() => {
-    const chaves = new Set(yearFilteredNotes.map((r) => r.chave));
+  const alertsForDisplay = useMemo(() => {
+    const source = selectedMonth ? monthFilteredNotes : yearFilteredNotes;
+    const chaves = new Set(source.map((r) => r.chave));
     return alerts.filter((a) => chaves.has(a.chave));
-  }, [alerts, yearFilteredNotes]);
+  }, [alerts, selectedMonth, monthFilteredNotes, yearFilteredNotes]);
 
   const filteredAlerts =
     nivelFilter === "all"
@@ -510,7 +619,7 @@ export default function AuditoriaFiscalPage() {
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button className="gap-2" disabled={yearFilteredNotes.length === 0}>
+                <Button className="gap-2" disabled={displayNotes.length === 0}>
                   Exportar
                   <ArrowUpRight className="size-4" />
                 </Button>
@@ -624,20 +733,39 @@ export default function AuditoriaFiscalPage() {
 
             <TabsContent value="resumo" className="space-y-6">
               {yearOptions.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <Label className="text-xs text-slate-500">Ano para exportação e análise</Label>
-                  <Select value={selectedYear || yearOptions[0]?.value} onValueChange={setSelectedYear}>
-                    <SelectTrigger className="w-[200px]">
-                      <SelectValue placeholder="Selecione o ano" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {yearOptions.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs text-slate-500">Ano</Label>
+                    <Select value={selectedYear || yearOptions[0]?.value} onValueChange={setSelectedYear}>
+                      <SelectTrigger className="w-[120px]">
+                        <SelectValue placeholder="Selecione o ano" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {yearOptions.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {monthOptions.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-slate-500">Mês (tabela e exclusão)</Label>
+                      <Select value={selectedMonth || monthOptions[0]?.value} onValueChange={setSelectedMonth}>
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Selecione o mês" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {monthOptions.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
               )}
               {stats && (
@@ -709,39 +837,60 @@ export default function AuditoriaFiscalPage() {
               )}
               <AuditoriaCharts stats={stats ? { totalICMS: stats.totalICMS, totalPIS: stats.totalPIS, totalCOFINS: stats.totalCOFINS, topCfops: stats.topCfops ?? [], topNcms: stats.topNcms ?? [], icmsByMonth: stats.icmsByMonth ?? [] } : null} />
               <AuditoriaItemsTable
-                records={yearFilteredNotes}
-                alerts={alertsForYear}
-                onDeleteMonth={selectedYear ? handleDeleteYear : undefined}
-                deleteMonthLoading={deleteYearLoading}
-                deleteMonthDisabled={!selectedYear || yearFilteredNotes.length === 0}
+                records={displayNotes}
+                alerts={alertsForDisplay}
+                onDeleteMonth={selectedMonth ? handleDeleteMonth : undefined}
+                deleteMonthLoading={deleteMonthLoading}
+                deleteMonthDisabled={!selectedMonth || monthFilteredNotes.length === 0}
+                onExportFiltered={handleExportFiltered}
                 clientCnpj={client?.cnpj}
               />
             </TabsContent>
 
             <TabsContent value="itens" className="space-y-6">
               {yearOptions.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <Label className="text-xs text-slate-500">Ano</Label>
-                  <Select value={selectedYear || yearOptions[0]?.value} onValueChange={setSelectedYear}>
-                    <SelectTrigger className="w-[200px]">
-                      <SelectValue placeholder="Selecione o ano" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {yearOptions.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs text-slate-500">Ano</Label>
+                    <Select value={selectedYear || yearOptions[0]?.value} onValueChange={setSelectedYear}>
+                      <SelectTrigger className="w-[120px]">
+                        <SelectValue placeholder="Selecione o ano" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {yearOptions.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {monthOptions.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-slate-500">Mês</Label>
+                      <Select value={selectedMonth || monthOptions[0]?.value} onValueChange={setSelectedMonth}>
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Selecione o mês" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {monthOptions.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
               )}
               <AuditoriaItemsTable
-                records={yearFilteredNotes}
-                alerts={alertsForYear}
-                onDeleteMonth={selectedYear ? handleDeleteYear : undefined}
-                deleteMonthLoading={deleteYearLoading}
-                deleteMonthDisabled={!selectedYear || yearFilteredNotes.length === 0}
+                records={displayNotes}
+                alerts={alertsForDisplay}
+                onDeleteMonth={selectedMonth ? handleDeleteMonth : undefined}
+                deleteMonthLoading={deleteMonthLoading}
+                deleteMonthDisabled={!selectedMonth || monthFilteredNotes.length === 0}
+                onExportFiltered={handleExportFiltered}
                 clientCnpj={client?.cnpj}
               />
             </TabsContent>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Loader2, Trash2 } from "lucide-react";
+import { Download, Loader2, Trash2 } from "lucide-react";
 import AuditoriaItemDetailsDialog from "./auditoria-item-details-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,12 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatCurrency, formatCnpj } from "@/lib/nfe";
 import type { NfeRecord, NfeItem } from "@/lib/nfe";
 
@@ -40,6 +46,8 @@ type Props = {
   onDeleteMonth?: () => void;
   deleteMonthLoading?: boolean;
   deleteMonthDisabled?: boolean;
+  /** Exportar apenas os itens filtrados pela busca (NCM, CEST, CFOP) e Operação */
+  onExportFiltered?: (filteredRecords: NfeRecord[], format: "csv" | "xlsx" | "pdf") => void;
   /** CNPJ do cliente - usado como fallback do destinatário em compras quando cnpj está ausente */
   clientCnpj?: string | null;
 };
@@ -50,6 +58,7 @@ export default function AuditoriaItemsTable({
   onDeleteMonth,
   deleteMonthLoading = false,
   deleteMonthDisabled = true,
+  onExportFiltered,
   clientCnpj,
 }: Props) {
   const [itemSearch, setItemSearch] = useState("");
@@ -139,6 +148,27 @@ export default function AuditoriaItemsTable({
     });
   }, [flatItems, itemSearch, tipoFilter, clientCnpj]);
 
+  const filteredRecords = useMemo(() => {
+    const byChave = new Map<string, number[]>();
+    for (const f of filteredItems) {
+      const arr = byChave.get(f.chave) ?? [];
+      arr.push(f.itemIndex);
+      byChave.set(f.chave, arr);
+    }
+    const result: NfeRecord[] = [];
+    for (const r of records) {
+      const indices = byChave.get(r.chave);
+      if (!indices?.length) continue;
+      const itens = r.itens.filter((_, i) => indices.includes(i));
+      if (itens.length === 0) continue;
+      result.push({ ...r, itens });
+    }
+    return result;
+  }, [records, filteredItems]);
+
+  const hasActiveFilter = itemSearch.trim().length >= 2 || tipoFilter !== "all";
+  const canExportFiltered = hasActiveFilter && filteredRecords.length > 0 && onExportFiltered;
+
   const renderNomeComCnpj = (razaoSocial?: string, cnpj?: string) => {
     const nome = razaoSocial?.trim() || "—";
     const doc = cnpj?.trim();
@@ -191,6 +221,21 @@ export default function AuditoriaItemsTable({
           />
         </div>
         <div className="flex flex-wrap items-center gap-2 justify-end">
+          {canExportFiltered && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50">
+                  <Download className="size-4" />
+                  Exportar busca ({filteredItems.length} itens)
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => onExportFiltered?.(filteredRecords, "csv")}>CSV (.csv)</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onExportFiltered?.(filteredRecords, "xlsx")}>Excel (.xlsx)</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onExportFiltered?.(filteredRecords, "pdf")}>PDF</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <label className="text-xs text-slate-500">Operação</label>
           <Select value={tipoFilter} onValueChange={(v) => setTipoFilter(v as "all" | "compra" | "venda")}>
             <SelectTrigger className="w-[140px]">

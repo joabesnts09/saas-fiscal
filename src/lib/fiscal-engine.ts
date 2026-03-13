@@ -53,6 +53,12 @@ function ncmValido(ncm: string | undefined): boolean {
   return digits.length === 8;
 }
 
+function cfopValido(cfop: string | undefined): boolean {
+  if (!cfop?.trim()) return true; // vazio pode ser opcional
+  const digits = String(cfop).replace(/\D/g, "");
+  return digits.length === 4;
+}
+
 export function analyzeFiscal(
   record: NfeRecord,
   client: { cnpj?: string | null; uf?: string | null }
@@ -143,28 +149,32 @@ export function analyzeFiscal(
       });
     }
 
-    // 6. CFOP incompatível com operação (compra vs venda)
-    // 5xxx/6xxx = saída (venda), 1xxx/2xxx/3xxx/7xxx = entrada (compra)
+    // 6. CFOP - estrutura: deve ter 4 dígitos quando informado
+    if (item.cfop?.trim() && !cfopValido(item.cfop)) {
+      alerts.push({
+        tipo: "cfop_invalido",
+        descricao: `CFOP inválido: deve ter 4 dígitos (informado: ${item.cfop})`,
+        nivel: "warning",
+        chave: record.chave,
+        itemIndex,
+        productId: item.productId,
+        detalhes: { cfop: item.cfop },
+      });
+    }
+
+    // 7. CFOP vs operação: validar APENAS quando empresa é EMITENTE (nota de venda).
+    // O CFOP no XML é sempre da perspectiva do emitente. Em compra (empresa = destinatário),
+    // o fornecedor emitiu — CFOP 5xxx/6xxx (saída) é normal. Em venda (empresa = emitente),
+    // devemos usar 5/6 (saída). Se aparecer 1/2/3 (entrada) na nossa venda, é erro.
     const notaTipo = (record.tipo ?? "outro") as string;
-    if (item.cfop && notaTipo !== "outro") {
-      const cfop = String(item.cfop).replace(/\D/g, "").slice(0, 1);
-      const cfopEhEntrada = ["1", "2", "3", "7"].includes(cfop);
-      const cfopEhSaida = ["5", "6"].includes(cfop);
-      if (notaTipo === "compra" && cfopEhSaida) {
+    if (item.cfop?.trim() && notaTipo === "venda") {
+      const primeiroDigito = String(item.cfop).replace(/\D/g, "").slice(0, 1);
+      const cfopEhEntrada = ["1", "2", "3"].includes(primeiroDigito);
+      if (cfopEhEntrada) {
         alerts.push({
           tipo: "cfop_incompativel",
-          descricao: `CFOP ${item.cfop} é de saída, incompatível com nota de compra`,
-          nivel: "warning",
-          chave: record.chave,
-          itemIndex,
-          productId: item.productId,
-          detalhes: { cfop: item.cfop, notaTipo },
-        });
-      } else if (notaTipo === "venda" && cfopEhEntrada) {
-        alerts.push({
-          tipo: "cfop_incompativel",
-          descricao: `CFOP ${item.cfop} é de entrada, incompatível com nota de venda`,
-          nivel: "warning",
+          descricao: `CFOP ${item.cfop} é de entrada, incompatível com nota de venda (empresa é emitente)`,
+          nivel: "error",
           chave: record.chave,
           itemIndex,
           productId: item.productId,
@@ -173,7 +183,7 @@ export function analyzeFiscal(
       }
     }
 
-    // 7. PIS/COFINS zerado quando CST exige tributação
+    // 8. PIS/COFINS zerado quando CST exige tributação
     const cstPis = item.cstPis ?? "";
     const cstCofins = item.cstCofins ?? "";
     const cstExigeTributacao = ["01", "02"].includes(cstPis) || ["01", "02"].includes(cstCofins);
