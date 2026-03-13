@@ -53,7 +53,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       const [notesRes, prestRes] = await Promise.all([
-        fetch(`/api/clients/${selectedClient.id}/notes`, { headers: getAuthHeaders() }),
+        fetch(`/api/clients/${selectedClient.id}/notes?tipo=venda`, { headers: getAuthHeaders() }),
         fetch(`/api/clients/${selectedClient.id}/prestacao`, { headers: getAuthHeaders() }),
       ]);
       if (notesRes.ok) {
@@ -81,7 +81,6 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     setUploadProgress({ sent: 0, total: newRecords.length });
     try {
       let totalSaved = 0;
-      let totalCnpjMismatch = 0;
       let totalDuplicates = 0;
       const batches: NfeRecord[][] = [];
       for (let i = 0; i < newRecords.length; i += IMPORT_BATCH_SIZE) {
@@ -105,7 +104,6 @@ export function NotesProvider({ children }: { children: ReactNode }) {
         const results = await Promise.all(promises);
         for (const data of results) {
           totalSaved += data?.saved ?? 0;
-          totalCnpjMismatch += data?.cnpjMismatchCount ?? 0;
           totalDuplicates += data?.duplicateCount ?? 0;
         }
         const sent = Math.min((i + chunk.length) * IMPORT_BATCH_SIZE, newRecords.length);
@@ -119,11 +117,6 @@ export function NotesProvider({ children }: { children: ReactNode }) {
       if (totalDuplicates > 0) {
         toast.warning(
           `${totalDuplicates} nota(s) duplicada(s) — já existiam no sistema e não foram importadas novamente.`
-        );
-      }
-      if (totalCnpjMismatch > 0) {
-        toast.warning(
-          `${totalCnpjMismatch} nota(s) com CNPJ diferente da empresa foram marcadas como inconsistência.`
         );
       }
     } catch (e) {

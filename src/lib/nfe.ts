@@ -30,6 +30,8 @@ export type NfeItem = {
   vCOFINS?: number;
 };
 
+export type NotaTipo = "venda" | "compra" | "outro";
+
 export type NfeRecord = {
   chave: string;
   numero: string;
@@ -38,7 +40,13 @@ export type NfeRecord = {
   valorTotal: number;
   status: "Autorizada" | "Cancelada";
   cnpjMismatch?: boolean;
+  tipo?: NotaTipo;
   emitente: {
+    cnpj: string;
+    razaoSocial: string;
+    endereco?: string;
+  };
+  destinatario?: {
     cnpj: string;
     razaoSocial: string;
     endereco?: string;
@@ -63,11 +71,75 @@ const parseNumber = (value: unknown): number => {
   return 0;
 };
 
+/** Verifica se um objeto parece ser o bloco dest da NFe (tem CNPJ/CPF/xNome). */
+function looksLikeDest(obj: unknown): obj is Record<string, unknown> {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+  const o = obj as Record<string, unknown>;
+  return !!(
+    o.CNPJ != null ||
+    o.cnpj != null ||
+    o.CPF != null ||
+    o.cpf != null ||
+    (o.xNome != null && typeof o.xNome === "string") ||
+    (o.xnome != null && typeof o.xnome === "string") ||
+    (o.nome != null && typeof o.nome === "string")
+  );
+}
+
+/** Busca recursiva por objeto dest na árvore parseada. */
+function findDestInTree(node: unknown, depth = 0): Record<string, unknown> | null {
+  if (depth > 8) return null;
+  if (looksLikeDest(node)) return node as Record<string, unknown>;
+  if (!node || typeof node !== "object") return null;
+  const obj = node as Record<string, unknown>;
+  for (const v of Object.values(obj)) {
+    const found = findDestInTree(v, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Extrai o bloco dest (destinatário) do XML. Tenta múltiplos caminhos e fallback via regex. */
+function extractDestinatario(
+  nfe: Record<string, unknown>,
+  rawXml: string,
+  fullData?: unknown
+): Record<string, unknown> {
+  const destKeys = ["dest", "Dest", "destinatario", "Destinatario", "DEST"];
+  for (const key of destKeys) {
+    const d = nfe[key];
+    if (looksLikeDest(d)) return d as Record<string, unknown>;
+  }
+
+  const found = fullData ? findDestInTree(fullData) : null;
+  if (found) return found;
+
+  const destMatch =
+    rawXml.match(/<dest[\s>]([\s\S]*?)<\/dest>/i) || rawXml.match(/<[\w-]+:dest[\s>]([\s\S]*?)<\/[\w-]+:dest>/i);
+  if (destMatch) {
+    const block = destMatch[1] ?? "";
+    const cnpj = block.match(/<CNPJ[^>]*>([^<]*)<\/CNPJ>/i)?.[1]?.trim();
+    const cpf = block.match(/<CPF[^>]*>([^<]*)<\/CPF>/i)?.[1]?.trim();
+    const xnome = block.match(/<xNome[^>]*>([^<]*)<\/xNome>/i)?.[1]?.trim();
+    const nome = block.match(/<nome[^>]*>([^<]*)<\/nome>/i)?.[1]?.trim();
+    if (cnpj || cpf || xnome || nome) {
+      return {
+        CNPJ: cnpj ?? "",
+        CPF: cpf ?? "",
+        xNome: xnome ?? nome ?? "",
+        nome: nome ?? xnome ?? "",
+      };
+    }
+  }
+
+  return {};
+}
+
 export const parseNfeXml = (xml: string): NfeRecord | null => {
   const data = parser.parse(xml);
   const nfeProc = data?.nfeProc;
   const nfeRoot = nfeProc?.NFe ?? data?.NFe ?? data?.nfe;
-  const nfe = nfeRoot?.infNFe ?? nfeRoot?.infNFeSupl;
+  const nfe = nfeRoot?.infNFe ?? nfeRoot?.infnfe ?? nfeRoot?.infNFeSupl;
   if (!nfe) return null;
 
   const ide = nfe.ide ?? {};
@@ -133,8 +205,8 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
 
   const rawId = nfe?.Id ?? nfe?.["@_Id"] ?? "";
 
-  const emit = nfe.emit ?? {};
-  const ender = emit.enderEmit ?? emit.ender ?? {};
+  const emit = nfe.emit ?? nfe.Emit ?? {};
+  const ender = emit.enderEmit ?? emit.ender ?? emit.EnderEmit ?? emit.Ender ?? {};
   const enderecoParts = [
     [ender.xLgr, ender.nro, ender.xCpl].filter(Boolean).join(" "),
     ender.xBairro,
@@ -142,6 +214,32 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
     ender.CEP ? `CEP. ${String(ender.CEP).replace(/^(\d{5})(\d{3})$/, "$1-$2")}` : "",
   ].filter(Boolean);
   const endereco = enderecoParts.join(", ") || undefined;
+
+  const dest = extractDestinatario(nfe, xml, data);
+  const enderDest = (dest.enderDest ?? dest.ender ?? {}) as Record<string, unknown>;
+  const enderecoDestParts = [
+    [enderDest.xLgr, enderDest.nro, enderDest.xCpl].filter(Boolean).join(" "),
+    enderDest.xBairro,
+    [enderDest.xMun, enderDest.UF].filter(Boolean).join(enderDest.xMun && enderDest.UF ? "/" : ""),
+    enderDest.CEP ? `CEP. ${String(enderDest.CEP).replace(/^(\d{5})(\d{3})$/, "$1-$2")}` : "",
+  ].filter(Boolean);
+  const enderecoDest = enderecoDestParts.join(", ") || undefined;
+
+  const pick = (o: Record<string, unknown>, ...keys: string[]) => {
+    for (const k of keys) {
+      const v = o[k];
+      if (v != null && v !== "") {
+        if (typeof v === "string") return v;
+        if (typeof v === "object" && v !== null) {
+          const textVal = (v as Record<string, unknown>)["#text"];
+          if (textVal != null) return String(textVal).trim();
+        }
+      }
+    }
+    return "";
+  };
+  const destDoc = pick(dest, "CNPJ", "cnpj", "CPF", "cpf", "idEstrangeiro").trim();
+  const destNome = pick(dest, "xNome", "xnome", "nome", "xLgr").trim();
 
   return {
     chave: String(rawId).replace(/^NFe/, "") || String(prot?.chNFe ?? ""),
@@ -155,6 +253,13 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
       razaoSocial: String(emit?.xNome ?? ""),
       endereco,
     },
+    destinatario: destDoc || destNome
+      ? {
+          cnpj: destDoc || "—",
+          razaoSocial: destNome || "Consumidor não identificado",
+          endereco: enderecoDest || undefined,
+        }
+      : undefined,
     itens,
   };
 };

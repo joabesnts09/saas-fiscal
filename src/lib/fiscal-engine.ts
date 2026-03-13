@@ -143,8 +143,58 @@ export function analyzeFiscal(
       });
     }
 
-    // 6. CFOP incorreto (simplificado: 5102 = interno, 6102 = interestadual)
-    // Sem UF do destinatário, não podemos validar com precisão - pular por enquanto
+    // 6. CFOP incompatível com operação (compra vs venda)
+    // 5xxx/6xxx = saída (venda), 1xxx/2xxx/3xxx/7xxx = entrada (compra)
+    const notaTipo = (record.tipo ?? "outro") as string;
+    if (item.cfop && notaTipo !== "outro") {
+      const cfop = String(item.cfop).replace(/\D/g, "").slice(0, 1);
+      const cfopEhEntrada = ["1", "2", "3", "7"].includes(cfop);
+      const cfopEhSaida = ["5", "6"].includes(cfop);
+      if (notaTipo === "compra" && cfopEhSaida) {
+        alerts.push({
+          tipo: "cfop_incompativel",
+          descricao: `CFOP ${item.cfop} é de saída, incompatível com nota de compra`,
+          nivel: "warning",
+          chave: record.chave,
+          itemIndex,
+          productId: item.productId,
+          detalhes: { cfop: item.cfop, notaTipo },
+        });
+      } else if (notaTipo === "venda" && cfopEhEntrada) {
+        alerts.push({
+          tipo: "cfop_incompativel",
+          descricao: `CFOP ${item.cfop} é de entrada, incompatível com nota de venda`,
+          nivel: "warning",
+          chave: record.chave,
+          itemIndex,
+          productId: item.productId,
+          detalhes: { cfop: item.cfop, notaTipo },
+        });
+      }
+    }
+
+    // 7. PIS/COFINS zerado quando CST exige tributação
+    const cstPis = item.cstPis ?? "";
+    const cstCofins = item.cstCofins ?? "";
+    const cstExigeTributacao = ["01", "02"].includes(cstPis) || ["01", "02"].includes(cstCofins);
+    if (cstExigeTributacao && item.vProd != null && item.vProd > 0) {
+      const pisZerado = (item.vPIS ?? 0) === 0 && ["01", "02"].includes(cstPis);
+      const cofinsZerado = (item.vCOFINS ?? 0) === 0 && ["01", "02"].includes(cstCofins);
+      if (pisZerado || cofinsZerado) {
+        const msg: string[] = [];
+        if (pisZerado) msg.push("PIS");
+        if (cofinsZerado) msg.push("COFINS");
+        alerts.push({
+          tipo: "pis_cofins_zerado",
+          descricao: `CST exige tributação, mas ${msg.join(" e ")} estão zerados`,
+          nivel: "warning",
+          chave: record.chave,
+          itemIndex,
+          productId: item.productId,
+          detalhes: { cstPis, cstCofins, vPIS: item.vPIS, vCOFINS: item.vCOFINS },
+        });
+      }
+    }
   });
 
   return alerts;

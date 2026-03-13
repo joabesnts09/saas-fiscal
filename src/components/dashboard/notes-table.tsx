@@ -243,7 +243,11 @@ export default function NotesTable({
               </TableRow>
             ) : (
               records.map((row) => (
-                <TableRow key={row.chave} className="cursor-pointer" onClick={() => onSelectRecord(row)}>
+                <TableRow
+                key={row.chave}
+                className="cursor-pointer transition-colors hover:bg-slate-50"
+                onClick={() => onSelectRecord(row)}
+              >
                   <TableCell className="font-medium">{formatDate(row.dataEmissao)}</TableCell>
                   <TableCell className="text-sm text-slate-500">
                     {row.chave.slice(0, 6)}...{row.chave.slice(-5)}
@@ -255,7 +259,7 @@ export default function NotesTable({
                       <Badge variant={row.status === "Autorizada" ? "secondary" : "destructive"}>
                         {row.status}
                       </Badge>
-                      {row.cnpjMismatch && (
+                      {row.cnpjMismatch && row.tipo === "venda" && (
                         <Badge variant="outline" className="border-amber-400 text-amber-700 text-xs">
                           CNPJ divergente
                         </Badge>

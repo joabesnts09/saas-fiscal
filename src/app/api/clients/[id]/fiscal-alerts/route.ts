@@ -8,7 +8,7 @@ async function verifyClientAccess(clientId: string, accountId: string) {
   return prisma.client.findFirst({ where: { id: clientId, accountId } });
 }
 
-function toNfeRecord(row: { chave: string; numero: string; serie: string; dataEmissao: string; valorTotal: number; status: string; emitenteJson: string; itensJson: string }): NfeRecord {
+function toNfeRecord(row: { chave: string; numero: string; serie: string; dataEmissao: string; valorTotal: number; status: string; tipo: string; emitenteJson: string; itensJson: string }): NfeRecord {
   const emitente = JSON.parse(row.emitenteJson || "{}");
   const itens = JSON.parse(row.itensJson || "[]");
   return {
@@ -18,6 +18,7 @@ function toNfeRecord(row: { chave: string; numero: string; serie: string; dataEm
     dataEmissao: row.dataEmissao,
     valorTotal: row.valorTotal,
     status: row.status as "Autorizada" | "Cancelada",
+    tipo: (row.tipo || "venda") as NfeRecord["tipo"],
     cnpjMismatch: Boolean(emitente.cnpjMismatch),
     emitente: { cnpj: emitente.cnpj ?? "", razaoSocial: emitente.razaoSocial ?? "", endereco: emitente.endereco },
     itens,
@@ -42,8 +43,10 @@ export async function POST(
     });
     const records = notes.map(toNfeRecord);
 
-    const allAlerts: { clientId: string; chave: string; itemIndex: number | null; productId: string | null; tipo: string; descricao: string; nivel: string; detalhes: string | null }[] = [];
-    for (const r of records) {
+    const allAlerts: { clientId: string; chave: string; itemIndex: number | null; productId: string | null; tipo: string; notaTipo: string | null; descricao: string; nivel: string; detalhes: string | null }[] = [];
+    for (let i = 0; i < notes.length; i++) {
+      const r = records[i]!;
+      const notaTipo = notes[i]!.tipo ?? "venda";
       const alerts = analyzeFiscal(r, { cnpj: client.cnpj });
       for (const a of alerts) {
         allAlerts.push({
@@ -52,6 +55,7 @@ export async function POST(
           itemIndex: a.itemIndex ?? null,
           productId: a.productId ?? null,
           tipo: a.tipo,
+          notaTipo,
           descricao: a.descricao,
           nivel: a.nivel,
           detalhes: a.detalhes ? JSON.stringify(a.detalhes) : null,
@@ -87,13 +91,15 @@ export async function GET(
     const chave = searchParams.get("chave");
     const nivel = searchParams.get("nivel");
     const tipo = searchParams.get("tipo");
+    const notaTipo = searchParams.get("notaTipo");
 
-    const where: { clientId: string; chave?: string; nivel?: string; tipo?: string } = {
+    const where: { clientId: string; chave?: string; nivel?: string; tipo?: string; notaTipo?: string } = {
       clientId,
     };
     if (chave) where.chave = chave;
     if (nivel) where.nivel = nivel;
     if (tipo) where.tipo = tipo;
+    if (notaTipo && ["venda", "compra", "outro"].includes(notaTipo)) where.notaTipo = notaTipo;
 
     const alerts = await prisma.fiscalAlert.findMany({
       where,

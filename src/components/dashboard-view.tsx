@@ -78,7 +78,7 @@ export default function DashboardView() {
     const totalValue = clientRecords.reduce((acc, r) => acc + r.valorTotal, 0);
     const authorized = clientRecords.filter((r) => r.status === "Autorizada");
     const canceled = clientRecords.filter((r) => r.status === "Cancelada");
-    const cnpjMismatchCount = clientRecords.filter((r) => r.cnpjMismatch).length;
+    const cnpjMismatchCount = clientRecords.filter((r) => r.cnpjMismatch && r.tipo === "venda").length;
     const pending = authorized.filter((r) => !includedMap[r.chave]);
     const included = authorized.filter((r) => includedMap[r.chave]);
     return {

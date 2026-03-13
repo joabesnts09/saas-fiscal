@@ -1,20 +1,42 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
+import JSZip from "jszip";
+import * as XLSX from "xlsx";
 import {
   AlertTriangle,
   AlertCircle,
+  ArrowUpRight,
   BarChart3,
   CheckCircle2,
+  FileEdit,
   FileText,
   Loader2,
   RefreshCw,
+  Settings2,
   ShieldCheck,
+  Trash2,
   TrendingUp,
+  UploadCloud,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -27,8 +49,45 @@ import { Badge } from "@/components/ui/badge";
 import ClientSelector from "@/components/client-selector";
 import { useClient } from "@/contexts/client-context";
 import { getAuthHeaders } from "@/lib/auth-client";
-import { formatCurrency, formatDate } from "@/lib/nfe";
+import { formatCnpj, formatCurrency, formatDate, getMonthLabel, parseNfeXml, type NfeRecord } from "@/lib/nfe";
+import { DEFAULT_EXPORT_FIELDS, getRecordRowsByItem, getRecordRowsByItemFormatted, type ExportFieldKey } from "@/lib/export-config";
 import { toast } from "@/lib/toast";
+import { useConfirm } from "@/components/confirm-dialog";
+import HeaderEditModal from "@/components/dashboard/header-edit-modal";
+import EditExportModal from "@/components/dashboard/edit-export-modal";
+import { useNotes } from "@/contexts/notes-context";
+import AuditoriaCharts from "@/components/auditoria/auditoria-charts";
+import AuditoriaItemsTable from "@/components/auditoria/auditoria-items-table";
+import AuditoriaSkeletons from "@/components/auditoria/auditoria-skeletons";
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+function getMonthsFromRecords(records: NfeRecord[]): { value: string; label: string }[] {
+  const monthSet = new Set<string>();
+  for (const r of records) {
+    const d = r.dataEmissao?.trim();
+    if (!d || d.length < 7) continue;
+    const yyyyMm = d.slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(yyyyMm)) monthSet.add(yyyyMm);
+  }
+  return Array.from(monthSet)
+    .sort((a, b) => b.localeCompare(a))
+    .map((value) => {
+      const [y, m] = value.split("-");
+      const d = new Date(Number(y), Number(m) - 1, 1);
+      const label = d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+      return { value, label: label.charAt(0).toUpperCase() + label.slice(1) };
+    });
+}
 
 type FiscalAlertRow = {
   id: string;
@@ -36,6 +95,7 @@ type FiscalAlertRow = {
   itemIndex: number | null;
   productId: string | null;
   tipo: string;
+  notaTipo: string | null;
   descricao: string;
   nivel: string;
   detalhes: string | null;
@@ -48,6 +108,8 @@ const TIPO_LABEL: Record<string, string> = {
   cest_obrigatorio: "CEST obrigatório",
   cst_icms_incompativel: "CST/ICMS incompatível",
   bebida_icms_zerado: "Bebida com ICMS zerado",
+  cfop_incompativel: "CFOP incompatível",
+  pis_cofins_zerado: "PIS/COFINS zerado",
 };
 
 function getTipoLabel(tipo: string): string {
@@ -67,23 +129,55 @@ function calculateScore(alerts: FiscalAlertRow[]): number {
 export default function AuditoriaFiscalPage() {
   const params = useParams();
   const clientId = params?.id as string | undefined;
-  const { clients, selectedClient } = useClient();
+  const { clients, selectedClient, refetch } = useClient();
   const client = selectedClient ?? clients.find((c) => c.id === clientId) ?? null;
+  const { addRecords, uploadProgress, deleteByMonth } = useNotes();
+  const { confirm } = useConfirm();
 
+  const [headerModalOpen, setHeaderModalOpen] = useState(false);
+  const [exportConfigModalOpen, setExportConfigModalOpen] = useState(false);
+  const [exportFields, setExportFields] = useState<ExportFieldKey[]>(() => [...DEFAULT_EXPORT_FIELDS]);
+  const [uploading, setUploading] = useState(false);
+  const [notes, setNotes] = useState<NfeRecord[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState("");
   const [alerts, setAlerts] = useState<FiscalAlertRow[]>([]);
   const [stats, setStats] = useState<{
     notesCount: number;
+    vendaCount?: number;
+    compraCount?: number;
     itemsCount: number;
     itemsWithFiscalData: number;
     totalICMS: number;
     totalPIS: number;
     totalCOFINS: number;
     topCfops: { cfop: string; count: number }[];
+    topNcms: { ncm: string; count: number }[];
+    icmsByMonth: { mes: string; valor: number }[];
     hasFiscalData: boolean;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
+  const [deleteMonthLoading, setDeleteMonthLoading] = useState(false);
   const [nivelFilter, setNivelFilter] = useState<string>("all");
+  const [notaTipoFilter, setNotaTipoFilter] = useState<string>("all");
+
+  const fetchNotes = useCallback(async () => {
+    if (!clientId) return;
+    try {
+      const res = await fetch(`/api/clients/${clientId}/notes`, {
+        headers: getAuthHeaders(),
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNotes(Array.isArray(data) ? data : []);
+      } else {
+        setNotes([]);
+      }
+    } catch {
+      setNotes([]);
+    }
+  }, [clientId]);
 
   const fetchStats = useCallback(async () => {
     if (!clientId) return;
@@ -105,9 +199,10 @@ export default function AuditoriaFiscalPage() {
 
   const fetchAlerts = useCallback(async () => {
     if (!clientId) return;
-    setLoading(true);
     try {
-      const res = await fetch(`/api/clients/${clientId}/fiscal-alerts`, {
+      const url = new URL(`/api/clients/${clientId}/fiscal-alerts`, window.location.origin);
+      if (notaTipoFilter !== "all") url.searchParams.set("notaTipo", notaTipoFilter);
+      const res = await fetch(url.toString(), {
         headers: getAuthHeaders(),
         credentials: "include",
       });
@@ -117,10 +212,8 @@ export default function AuditoriaFiscalPage() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Erro ao buscar alertas fiscais");
       setAlerts([]);
-    } finally {
-      setLoading(false);
     }
-  }, [clientId]);
+  }, [clientId, notaTipoFilter]);
 
   const handleReanalisar = async () => {
     if (!clientId) return;
@@ -134,7 +227,7 @@ export default function AuditoriaFiscalPage() {
       if (!res.ok) throw new Error("Erro ao analisar");
       const data = await res.json();
       toast.success(`${data.analyzed} notas analisadas. ${data.alertsCount} alertas encontrados.`);
-      await Promise.all([fetchAlerts(), fetchStats()]);
+      await Promise.all([fetchNotes(), fetchAlerts(), fetchStats()]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Erro ao reanalisar");
     } finally {
@@ -142,10 +235,191 @@ export default function AuditoriaFiscalPage() {
     }
   };
 
+  const handleFiles = async (files: FileList | null) => {
+    if (!files?.length || !selectedClient?.id) return;
+    setUploading(true);
+    try {
+      const parsed: NfeRecord[] = [];
+      const fileList = Array.from(files);
+      for (const file of fileList) {
+        if (file.name.toLowerCase().endsWith(".zip")) {
+          try {
+            const zip = await JSZip.loadAsync(file);
+            const entries = Object.values(zip.files).filter((e) => !e.dir && e.name.toLowerCase().endsWith(".xml"));
+            const texts = await Promise.all(entries.map((e) => e.async("text")));
+            const results = texts.map((t) => parseNfeXml(t)).filter((r): r is NfeRecord => !!r?.chave);
+            parsed.push(...results);
+          } catch {
+            /* ignore */
+          }
+        } else if (file.name.toLowerCase().endsWith(".xml")) {
+          const text = await file.text();
+          const r = parseNfeXml(text);
+          if (r?.chave) parsed.push(r);
+        }
+      }
+      if (parsed.length > 0) {
+        await addRecords(parsed);
+        await fetchNotes();
+        toast.success(`${parsed.length} nota(s) importada(s).`);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erro ao importar");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const monthOptions = useMemo(() => getMonthsFromRecords(notes), [notes]);
+  const monthFilteredNotes = useMemo(() => {
+    if (!selectedMonth) return notes;
+    const prefix = `${selectedMonth}-`;
+    return notes.filter((r) => {
+      const d = r.dataEmissao?.trim() ?? "";
+      return d.length >= 7 && (d.slice(0, 7) === selectedMonth || d.startsWith(prefix));
+    });
+  }, [notes, selectedMonth]);
+
+  const fetchExportConfig = useCallback(async () => {
+    if (!clientId) return;
+    try {
+      const res = await fetch(`/api/clients/${clientId}/export-config`, {
+        headers: getAuthHeaders(),
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.fields) && data.fields.length > 0) {
+          setExportFields(data.fields);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [clientId]);
+
   useEffect(() => {
-    fetchAlerts();
-    fetchStats();
-  }, [fetchAlerts, fetchStats]);
+    fetchExportConfig();
+  }, [fetchExportConfig]);
+
+  useEffect(() => {
+    if (monthOptions.length > 0 && !monthOptions.some((o) => o.value === selectedMonth)) {
+      setSelectedMonth(monthOptions[0]!.value);
+    } else if (monthOptions.length === 0) {
+      setSelectedMonth("");
+    }
+  }, [monthOptions, selectedMonth]);
+
+  const getExportHeader = (source: NfeRecord[]) => ({
+    empresa: client?.name ?? "—",
+    cnpj: formatCnpj(client?.cnpj ?? null),
+    endereco: client?.endereco?.trim() || "—",
+    contato: client?.contato?.trim() || "—",
+    responsavel: client?.responsavel?.trim() || "—",
+    mes: getMonthLabel(source) || (monthOptions.find((o) => o.value === selectedMonth)?.label ?? ""),
+  });
+
+  const exportCsv = () => {
+    const exportSource = monthFilteredNotes;
+    const { empresa, cnpj, endereco, contato, responsavel, mes } = getExportHeader(exportSource);
+    const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
+    const rows = exportSource.flatMap((r) => getRecordRowsByItemFormatted(r, exportFields, client?.cnpj));
+    const headers = Object.keys(rows[0] ?? {});
+    const headerBlock = [
+      `EMPRESA;${empresa}`,
+      `CNPJ;${cnpj}`,
+      `ENDEREÇO;${endereco}`,
+      `CONTATO;${contato}`,
+      `RESPONSÁVEL;${responsavel}`,
+      `MÊS;${mes.toUpperCase()}`,
+      "",
+    ].join("\n");
+    const tableRows = [headers.join(";"), ...rows.map((row) => headers.map((h) => `"${String(row[h as keyof typeof row] ?? "").replace(/"/g, '""')}"`).join(";"))];
+    const totalBlock = ["", `VALOR TOTAL DO MÊS: ${mes.toUpperCase()};${formatCurrency(totalVal)}`].join("\n");
+    downloadBlob(new Blob(["\ufeff", [headerBlock, ...tableRows, totalBlock].join("\n")], { type: "text/csv;charset=utf-8;" }), "notas-auditoria.csv");
+  };
+
+  const exportXlsx = () => {
+    const exportSource = monthFilteredNotes;
+    const { empresa, cnpj, endereco, contato, responsavel, mes } = getExportHeader(exportSource);
+    const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
+    const rows = exportSource.flatMap((r) => getRecordRowsByItem(r, exportFields, client?.cnpj));
+    const headers = Object.keys(rows[0] ?? {});
+    const headerData = [
+      ["EMPRESA", empresa],
+      ["CNPJ", cnpj],
+      ["ENDEREÇO", endereco],
+      ["CONTATO", contato],
+      ["RESPONSÁVEL", responsavel],
+      ["MÊS", mes.toUpperCase()],
+      [],
+      headers,
+    ];
+    const dataRows = rows.map((r) => headers.map((h) => r[h] ?? ""));
+    const totalRow = [[`VALOR TOTAL DO MÊS: ${mes.toUpperCase()}`, formatCurrency(totalVal), ...Array(Math.max(0, headers.length - 2)).fill("")] as (string | number)[]];
+    const ws = XLSX.utils.aoa_to_sheet([...headerData, ...dataRows, ...totalRow]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Notas");
+    downloadBlob(new Blob([XLSX.write(wb, { type: "array", bookType: "xlsx" })], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), "notas-auditoria.xlsx");
+  };
+
+  const exportPdf = () => {
+    const exportSource = monthFilteredNotes;
+    const { empresa, cnpj, endereco, contato, responsavel, mes } = getExportHeader(exportSource);
+    const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
+    const rows = exportSource.flatMap((r) => getRecordRowsByItemFormatted(r, exportFields, client?.cnpj));
+    const headers = Object.keys(rows[0] ?? {});
+    const escapeHtml = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const headerHtml = `<div style="margin-bottom:20px;font-size:12px;line-height:1.6"><p><strong>EMPRESA:</strong> ${escapeHtml(empresa)}</p><p><strong>CNPJ:</strong> ${escapeHtml(cnpj)}</p><p><strong>ENDEREÇO:</strong> ${escapeHtml(endereco)}</p><p><strong>CONTATO:</strong> ${escapeHtml(contato)}</p><p><strong>RESPONSÁVEL:</strong> ${escapeHtml(responsavel)}</p><p><strong>MÊS:</strong> ${escapeHtml(mes.toUpperCase())}</p></div><hr style="border:1px solid #ddd;margin:12px 0" />`;
+    const totalHtml = `<hr style="border:1px solid #ddd;margin:16px 0" /><p style="background:#e5e5e5;padding:10px;font-weight:bold;margin:0">VALOR TOTAL DO MÊS: ${escapeHtml(mes.toUpperCase())} — ${escapeHtml(formatCurrency(totalVal))}</p>`;
+    const thCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
+    const bodyRows = rows.map((r) => `<tr>${headers.map((h) => `<td>${escapeHtml(String(r[h] ?? "")).replace(/\n/g, "<br />")}</td>`).join("")}</tr>`).join("");
+    const html = `<!DOCTYPE html><html><head><title>Notas - Auditoria</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Notas fiscais - Auditoria</h1>${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>${totalHtml}</body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.print();
+  };
+
+  const handleDeleteMonth = useCallback(async () => {
+    if (!selectedMonth) return;
+    const monthLabel = monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth;
+    const confirmed = await confirm({
+      title: "Excluir notas do mês",
+      description: `Excluir todas as notas de ${monthLabel}? Você poderá fazer o upload dos XMLs novamente. Esta ação não pode ser desfeita.`,
+      confirmLabel: "Excluir",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    setDeleteMonthLoading(true);
+    try {
+      const count = await deleteByMonth(selectedMonth);
+      await fetchNotes();
+      await fetchAlerts();
+      await fetchStats();
+      toast.success(count > 0 ? `${count} nota(s) excluída(s). Faça o upload dos XMLs novamente.` : "Nenhuma nota encontrada para este mês.");
+    } catch (e) {
+      toast.error("Erro ao excluir notas.");
+      console.error(e);
+    } finally {
+      setDeleteMonthLoading(false);
+    }
+  }, [selectedMonth, monthOptions, confirm, deleteByMonth, fetchNotes, fetchAlerts, fetchStats]);
+
+  useEffect(() => {
+    if (!clientId) return;
+    setLoading(true);
+    Promise.all([fetchNotes(), fetchStats(), fetchAlerts()]).finally(() =>
+      setLoading(false)
+    );
+  }, [clientId, fetchNotes, fetchStats, fetchAlerts]);
+
+  const alertsForMonth = useMemo(() => {
+    const chaves = new Set(monthFilteredNotes.map((r) => r.chave));
+    return alerts.filter((a) => chaves.has(a.chave));
+  }, [alerts, monthFilteredNotes]);
 
   const filteredAlerts =
     nivelFilter === "all"
@@ -159,47 +433,114 @@ export default function AuditoriaFiscalPage() {
 
   if (!clientId) {
     return (
-      <div className="mx-auto max-w-4xl p-8">
-        <h1 className="text-2xl font-bold text-slate-900">Auditoria fiscal</h1>
-        <p className="mt-1 text-slate-600">Selecione uma empresa para ver a auditoria.</p>
+      <div className="min-h-full bg-slate-50 text-slate-900">
+        <header className="border-b border-slate-200 bg-white px-6 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <p className="text-sm text-slate-500">Empresa: —</p>
+              <h1 className="text-2xl font-semibold tracking-tight">Auditoria fiscal</h1>
+            </div>
+            <ClientSelector />
+          </div>
+        </header>
+        <section className="px-6 py-6">
+          <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-white py-16 text-center">
+            <p className="text-slate-600">Selecione uma empresa para ver a auditoria.</p>
+            <p className="mt-1 text-sm text-slate-500">Escolha uma empresa no seletor acima</p>
+          </div>
+        </section>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-6xl p-6 md:p-8">
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm text-slate-500">Empresa: {client?.name ?? "..."}</p>
-          <h1 className="text-2xl font-bold text-slate-900">Auditoria fiscal</h1>
-          <p className="mt-1 text-slate-600">
-            Inconsistências detectadas, tributos e validações fiscais
-          </p>
+    <div className="min-h-full bg-slate-50 text-slate-900">
+      {(uploading || uploadProgress) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="flex items-center gap-4">
+              <div className="flex size-12 shrink-0 items-center justify-center rounded-full bg-emerald-100">
+                <Loader2 className="size-6 animate-spin text-emerald-600" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-slate-900">Importando notas</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums text-emerald-600">
+                  {uploadProgress ? `${uploadProgress.sent} de ${uploadProgress.total}` : "..."}
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <ClientSelector />
-          <Button
-            variant="outline"
-            onClick={handleReanalisar}
-            disabled={analyzing}
-            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
-          >
-            {analyzing ? (
-              <Loader2 className="mr-2 size-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-2 size-4" />
-            )}
-            Reanalisar notas
-          </Button>
+      )}
+      <header className="border-b border-slate-200 bg-white px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <p className="text-sm text-slate-500">Empresa: {client?.name ?? "—"}</p>
+              <h1 className="text-2xl font-semibold tracking-tight">Auditoria fiscal</h1>
+            </div>
+            <ClientSelector />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="outline" className="gap-2" disabled={uploading} asChild>
+              <label className="cursor-pointer">
+                {uploading ? <Loader2 className="size-4 animate-spin" /> : <UploadCloud className="size-4" />}
+                {uploading ? "Importando..." : "Upload XML"}
+                <input
+                  type="file"
+                  className="hidden"
+                  multiple
+                  accept=".xml,.XML,.zip"
+                  disabled={uploading}
+                  onClick={(e) => { (e.currentTarget as HTMLInputElement).value = ""; }}
+                  onChange={(e) => handleFiles(e.target.files)}
+                />
+              </label>
+            </Button>
+            <Button variant="outline" size="sm" className="gap-2" onClick={() => setHeaderModalOpen(true)}>
+              <FileEdit className="size-4" />
+              Editar cabeçalho
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => setExportConfigModalOpen(true)}
+            >
+              <Settings2 className="size-4" />
+              Editar exportação
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button className="gap-2" disabled={monthFilteredNotes.length === 0}>
+                  Exportar
+                  <ArrowUpRight className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={exportXlsx}>Excel (.xlsx)</DropdownMenuItem>
+                <DropdownMenuItem onClick={exportCsv}>CSV (.csv)</DropdownMenuItem>
+                <DropdownMenuItem onClick={exportPdf}>PDF</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              variant="outline"
+              onClick={handleReanalisar}
+              disabled={analyzing}
+              className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 gap-2"
+            >
+              {analyzing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              Reanalisar notas
+            </Button>
+          </div>
         </div>
-      </div>
+      </header>
 
-      {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="size-8 animate-spin text-emerald-500" />
-        </div>
-      ) : (
-        <>
+      <section className="px-6 py-6">
+        {loading ? (
+          <AuditoriaSkeletons />
+        ) : (
+          <>
           <div className="mb-6 grid gap-4 md:grid-cols-2 lg:grid-cols-5">
             <Card className="border-slate-200 shadow-sm">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -276,90 +617,154 @@ export default function AuditoriaFiscalPage() {
             </Card>
           </div>
 
-          {stats && (
-            <Card className="mb-6 border-slate-200 shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BarChart3 className="size-5" />
-                  Resumo da análise
-                </CardTitle>
-                <p className="text-sm text-slate-500">
-                  {stats.notesCount > 0
-                    ? `Dados extraídos de ${stats.notesCount} nota(s) e ${stats.itemsCount} item(ns)`
-                    : "Nenhuma nota importada. Importe XMLs em Documentos fiscais para iniciar a análise."}
-                </p>
-              </CardHeader>
-              <CardContent>
-                {stats.notesCount === 0 ? (
-                  <p className="text-sm text-slate-600">
-                    Importe XMLs de notas fiscais em Documentos fiscais para ter dados para análise.
-                  </p>
-                ) : (
-                  <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
-                      <div className="flex size-10 items-center justify-center rounded-full bg-blue-100 text-blue-600">
-                        <FileText className="size-5" />
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-500">Notas analisadas</p>
-                        <p className="text-xl font-semibold text-slate-900">{stats.notesCount}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
-                      <div>
-                        <p className="text-xs text-slate-500">Itens analisados</p>
-                        <p className="text-xl font-semibold text-slate-900">{stats.itemsCount}</p>
-                      </div>
-                    </div>
-                    {stats.hasFiscalData && (
-                      <>
-                        <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
-                          <div className="flex size-10 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-                            <TrendingUp className="size-5" />
-                          </div>
-                          <div>
-                            <p className="text-xs text-slate-500">ICMS total</p>
-                            <p className="text-xl font-semibold text-slate-900">{formatCurrency(stats.totalICMS)}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
-                          <div>
-                            <p className="text-xs text-slate-500">PIS + COFINS</p>
-                            <p className="text-xl font-semibold text-slate-900">{formatCurrency(stats.totalPIS + stats.totalCOFINS)}</p>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-                {stats.notesCount > 0 && stats.hasFiscalData && stats.topCfops.length > 0 ? (
-                  <div className="mt-4">
-                    <p className="mb-2 text-sm font-medium text-slate-700">CFOPs mais utilizados</p>
-                    <div className="flex flex-wrap gap-2">
-                      {stats.topCfops.map(({ cfop, count }) => (
-                        <Badge key={cfop} variant="outline" className="border-slate-200 bg-white">
-                          {cfop}: {count} itens
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {!stats.hasFiscalData && stats.notesCount > 0 && stats.itemsCount > 0 ? (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-4">
-                    <p className="text-sm text-amber-800">
-                      As notas foram importadas antes da análise fiscal. Para habilitar a auditoria completa (ICMS, PIS, COFINS, NCM, CFOP), 
-                      reimporte os XMLs em Documentos fiscais.
-                    </p>
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-          )}
+          <Tabs defaultValue="resumo" className="mb-6">
+            <TabsList className="mb-4">
+              <TabsTrigger value="resumo">Resumo e análise</TabsTrigger>
+              <TabsTrigger value="itens">Análise por itens</TabsTrigger>
+              <TabsTrigger value="inconsistencias">Inconsistências</TabsTrigger>
+            </TabsList>
 
-          <Card className="border-slate-200 shadow-sm">
+            <TabsContent value="resumo" className="space-y-6">
+              {monthOptions.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-slate-500">Mês para exportação e análise</Label>
+                  <Select value={selectedMonth || monthOptions[0]?.value} onValueChange={setSelectedMonth}>
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue placeholder="Selecione o mês" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {monthOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {stats && (
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <BarChart3 className="size-5" />
+                      Resumo da análise
+                    </CardTitle>
+                    <p className="text-sm text-slate-500">
+                      {stats.notesCount > 0
+                        ? `Dados extraídos de ${stats.notesCount} nota(s) (${stats.vendaCount ?? stats.notesCount} venda, ${stats.compraCount ?? 0} compra) e ${stats.itemsCount} item(ns)`
+                        : "Nenhuma nota importada. Importe XMLs em Documentos fiscais para iniciar a análise."}
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    {stats.notesCount === 0 ? (
+                      <p className="text-sm text-slate-600">
+                        Importe XMLs de notas fiscais em Documentos fiscais para ter dados para análise.
+                      </p>
+                    ) : (
+                      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                        <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
+                          <div className="flex size-10 items-center justify-center rounded-full bg-blue-100 text-blue-600">
+                            <FileText className="size-5" />
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-500">Notas analisadas</p>
+                            <p className="text-xl font-semibold text-slate-900">{stats.notesCount}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
+                          <div>
+                            <p className="text-xs text-slate-500">Itens analisados</p>
+                            <p className="text-xl font-semibold text-slate-900">{stats.itemsCount}</p>
+                          </div>
+                        </div>
+                        {stats.hasFiscalData && (
+                          <>
+                            <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
+                              <div className="flex size-10 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+                                <TrendingUp className="size-5" />
+                              </div>
+                              <div>
+                                <p className="text-xs text-slate-500">ICMS total</p>
+                                <p className="text-xl font-semibold text-slate-900">{formatCurrency(stats.totalICMS)}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
+                              <div>
+                                <p className="text-xs text-slate-500">PIS + COFINS</p>
+                                <p className="text-xl font-semibold text-slate-900">{formatCurrency(stats.totalPIS + stats.totalCOFINS)}</p>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {!stats.hasFiscalData && stats.notesCount > 0 && stats.itemsCount > 0 ? (
+                      <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/50 p-4">
+                        <p className="text-sm text-amber-800">
+                          As notas foram importadas antes da análise fiscal. Para habilitar a auditoria completa (ICMS, PIS, COFINS, NCM, CFOP),
+                          reimporte os XMLs em Documentos fiscais.
+                        </p>
+                      </div>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              )}
+              <AuditoriaCharts stats={stats ? { totalICMS: stats.totalICMS, totalPIS: stats.totalPIS, totalCOFINS: stats.totalCOFINS, topCfops: stats.topCfops ?? [], topNcms: stats.topNcms ?? [], icmsByMonth: stats.icmsByMonth ?? [] } : null} />
+              <AuditoriaItemsTable
+                records={monthFilteredNotes}
+                alerts={alertsForMonth}
+                onDeleteMonth={selectedMonth ? handleDeleteMonth : undefined}
+                deleteMonthLoading={deleteMonthLoading}
+                deleteMonthDisabled={!selectedMonth || monthFilteredNotes.length === 0}
+                clientCnpj={client?.cnpj}
+              />
+            </TabsContent>
+
+            <TabsContent value="itens" className="space-y-6">
+              {monthOptions.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-slate-500">Mês</Label>
+                  <Select value={selectedMonth || monthOptions[0]?.value} onValueChange={setSelectedMonth}>
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue placeholder="Selecione o mês" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {monthOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <AuditoriaItemsTable
+                records={monthFilteredNotes}
+                alerts={alertsForMonth}
+                onDeleteMonth={selectedMonth ? handleDeleteMonth : undefined}
+                deleteMonthLoading={deleteMonthLoading}
+                deleteMonthDisabled={!selectedMonth || monthFilteredNotes.length === 0}
+                clientCnpj={client?.cnpj}
+              />
+            </TabsContent>
+
+            <TabsContent value="inconsistencias">
+              <Card className="border-slate-200 shadow-sm">
             <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <CardTitle>Inconsistências detectadas</CardTitle>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <span className="text-xs text-slate-500 self-center">Nota:</span>
+                {(["all", "venda", "compra"] as const).map((n) => (
+                  <Button
+                    key={n}
+                    variant={notaTipoFilter === n ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setNotaTipoFilter(n)}
+                  >
+                    {n === "all" ? "Todas" : n === "venda" ? "Venda" : "Compra"}
+                  </Button>
+                ))}
+                <span className="w-2" />
                 {(["all", "error", "warning", "info"] as const).map((n) => (
                   <Button
                     key={n}
@@ -388,6 +793,7 @@ export default function AuditoriaFiscalPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead>Operação</TableHead>
                         <TableHead>Chave</TableHead>
                         <TableHead>Item</TableHead>
                         <TableHead>Tipo</TableHead>
@@ -399,6 +805,20 @@ export default function AuditoriaFiscalPage() {
                     <TableBody>
                       {filteredAlerts.map((a) => (
                         <TableRow key={a.id}>
+                          <TableCell>
+                            <Badge
+                              variant="outline"
+                              className={
+                                a.notaTipo === "compra"
+                                  ? "border-blue-300 bg-blue-50 text-blue-700"
+                                  : a.notaTipo === "venda"
+                                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                                    : "border-slate-200 bg-slate-50 text-slate-600"
+                              }
+                            >
+                              {a.notaTipo === "compra" ? "Compra" : a.notaTipo === "venda" ? "Venda" : "Outro"}
+                            </Badge>
+                          </TableCell>
                           <TableCell className="font-mono text-xs text-slate-600">
                             {a.chave.slice(0, 20)}...
                           </TableCell>
@@ -408,8 +828,8 @@ export default function AuditoriaFiscalPage() {
                               <span className="ml-1 text-slate-500">({a.productId})</span>
                             )}
                           </TableCell>
-                          <TableCell>{getTipoLabel(a.tipo)}</TableCell>
-                          <TableCell className="max-w-[320px] truncate" title={a.descricao}>
+                          <TableCell className="whitespace-nowrap">{getTipoLabel(a.tipo)}</TableCell>
+                          <TableCell className="min-w-[280px] max-w-[480px] text-sm text-slate-700">
                             {a.descricao}
                           </TableCell>
                           <TableCell>
@@ -435,6 +855,25 @@ export default function AuditoriaFiscalPage() {
               )}
             </CardContent>
           </Card>
+            </TabsContent>
+          </Tabs>
+          </>
+        )}
+      </section>
+      {client && (
+        <>
+          <HeaderEditModal
+            client={client}
+            open={headerModalOpen}
+            onOpenChange={setHeaderModalOpen}
+            onSaved={refetch}
+          />
+          <EditExportModal
+            clientId={client.id}
+            open={exportConfigModalOpen}
+            onOpenChange={setExportConfigModalOpen}
+            onSaved={setExportFields}
+          />
         </>
       )}
     </div>

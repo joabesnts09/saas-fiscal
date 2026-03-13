@@ -65,12 +65,23 @@ model Client {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  account      Account       @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  nfeRecords   NfeRecord[]
-  prestacao    PrestacaoIncluida[]
-  fiscalAlerts FiscalAlert[]
+  account       Account       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  nfeRecords    NfeRecord[]
+  prestacao     PrestacaoIncluida[]
+  fiscalAlerts  FiscalAlert[]
+  exportConfig  ExportConfig?
 
   @@index([accountId])
+}
+
+model ExportConfig {
+  id        String   @id @default(uuid())
+  clientId  String   @unique
+  fieldsJson String  // JSON: string[] - array of field keys in order
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 }
 
 model FiscalAlert {
@@ -80,6 +91,7 @@ model FiscalAlert {
   itemIndex Int?     // índice do item (null = alerta da nota inteira)
   productId String?
   tipo      String   // divergencia_icms, cfop_incorreto, ncm_invalido, cest_obrigatorio, etc.
+  notaTipo  String?  // venda | compra | outro - tipo da nota fiscal
   descricao String
   nivel     String   // info, warning, error
   detalhes  String?  // JSON
@@ -99,8 +111,10 @@ model NfeRecord {
   dataEmissao String
   valorTotal  Float
   status      String   // Autorizada, Cancelada
-  emitenteJson String  // JSON: { cnpj, razaoSocial, endereco }
-  itensJson   String   // JSON: NfeItem[]
+  tipo        String   @default("venda") // venda (emitente=empresa), compra (destinatario=empresa), outro
+  emitenteJson     String  // JSON: { cnpj, razaoSocial, endereco }
+  destinatarioJson String? // JSON: { cnpj, razaoSocial, endereco } (opcional)
+  itensJson        String  // JSON: NfeItem[]
   clientId    String
   createdAt   DateTime @default(now())
 

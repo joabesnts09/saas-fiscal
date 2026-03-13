@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
-import { ArrowUpRight, FileEdit, Loader2, UploadCloud } from "lucide-react";
+import { ArrowUpRight, FileEdit, Loader2, Settings2, UploadCloud } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatCnpj, formatCurrency, formatDate, getMonthLabel, parseNfeXml, summarizeItems, type NfeRecord } from "@/lib/nfe";
+import {
+  DEFAULT_EXPORT_FIELDS,
+  getRecordRow,
+  getRecordRowFormatted,
+  type ExportFieldKey,
+} from "@/lib/export-config";
 import AlertsPanel from "@/components/dashboard/alerts-panel";
 import NoteDetailsDialog from "@/components/dashboard/note-details-dialog";
 import NotesTable, {
@@ -20,12 +26,14 @@ import NotesTable, {
   type NotesTableFilterHandlers,
 } from "@/components/dashboard/notes-table";
 import HeaderEditModal from "@/components/dashboard/header-edit-modal";
+import EditExportModal from "@/components/dashboard/edit-export-modal";
 import PrestacaoPanel from "@/components/dashboard/prestacao-panel";
 import StatsCards from "@/components/dashboard/stats-cards";
 import { TopbarSearch } from "@/components/dashboard/topbar";
 import ClientSelector from "@/components/client-selector";
 import { useClient } from "@/contexts/client-context";
 import { useNotes } from "@/contexts/notes-context";
+import { getAuthHeaders } from "@/lib/auth-client";
 import { useConfirm } from "@/components/confirm-dialog";
 import { toast } from "@/lib/toast";
 
@@ -61,6 +69,8 @@ const downloadBlob = (blob: Blob, filename: string) => {
 export default function DocumentosManager() {
   const { selectedClient, refetch } = useClient();
   const [headerModalOpen, setHeaderModalOpen] = useState(false);
+  const [exportConfigModalOpen, setExportConfigModalOpen] = useState(false);
+  const [exportFields, setExportFields] = useState<ExportFieldKey[]>(() => [...DEFAULT_EXPORT_FIELDS]);
   const { confirm } = useConfirm();
   const { records, includedMap, loading: notesLoading, uploadProgress, addRecords, setIncludedMap, updateRecord, deleteRecord, deleteByMonth } = useNotes();
   const [query, setQuery] = useState("");
@@ -85,6 +95,28 @@ export default function DocumentosManager() {
     () => getMonthsFromRecords(clientRecords),
     [clientRecords]
   );
+
+  const fetchExportConfig = useCallback(async () => {
+    if (!selectedClient?.id) return;
+    try {
+      const res = await fetch(`/api/clients/${selectedClient.id}/export-config`, {
+        headers: getAuthHeaders(),
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.fields) && data.fields.length > 0) {
+          setExportFields(data.fields);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [selectedClient?.id]);
+
+  useEffect(() => {
+    fetchExportConfig();
+  }, [fetchExportConfig]);
 
   useEffect(() => {
     if (monthOptions.length === 0) {
@@ -154,7 +186,7 @@ export default function DocumentosManager() {
     const totalValue = monthFilteredRecords.reduce((a, r) => a + r.valorTotal, 0);
     const authorized = monthFilteredRecords.filter((r) => r.status === "Autorizada");
     const canceled = monthFilteredRecords.filter((r) => r.status === "Cancelada");
-    const cnpjMismatchCount = monthFilteredRecords.filter((r) => r.cnpjMismatch).length;
+    const cnpjMismatchCount = monthFilteredRecords.filter((r) => r.cnpjMismatch && r.tipo === "venda").length;
     const pending = authorized.filter((r) => !includedMap[r.chave]);
     const included = authorized.filter((r) => includedMap[r.chave]);
     return {
@@ -227,14 +259,7 @@ export default function DocumentosManager() {
   const exportCsv = () => {
     const { empresa, cnpj, endereco, contato, responsavel, mes } = getExportHeader();
     const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
-    const rows = exportSource.map((r) => ({
-      Data: formatDate(r.dataEmissao),
-      "Chave de acesso": r.chave,
-      "NF-e/NFC-e": r.numero,
-      Valor: formatCurrency(r.valorTotal),
-      "Discriminação dos itens": summarizeItems(r.itens),
-      Status: r.status,
-    }));
+    const rows = exportSource.map((r) => getRecordRowFormatted(r, exportFields));
     const headers = Object.keys(rows[0] ?? {});
     const headerBlock = [
       `EMPRESA;${empresa}`,
@@ -257,14 +282,8 @@ export default function DocumentosManager() {
   const exportXlsx = () => {
     const { empresa, cnpj, endereco, contato, responsavel, mes } = getExportHeader();
     const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
-    const rows = exportSource.map((r) => ({
-      Data: formatDate(r.dataEmissao),
-      "Chave de acesso": r.chave,
-      "NF-e/NFC-e": r.numero,
-      Valor: r.valorTotal,
-      "Discriminação dos itens": summarizeItems(r.itens),
-      Status: r.status,
-    }));
+    const rows = exportSource.map((r) => getRecordRow(r, exportFields));
+    const headers = Object.keys(rows[0] ?? {});
     const headerData = [
       ["EMPRESA", empresa],
       ["CNPJ", cnpj],
@@ -273,10 +292,10 @@ export default function DocumentosManager() {
       ["RESPONSÁVEL", responsavel],
       ["MÊS", mes.toUpperCase()],
       [],
-      ["Data", "Chave de acesso", "NF-e/NFC-e", "Valor", "Discriminação dos itens", "Status"],
+      headers,
     ];
-    const dataRows = rows.map((r) => [r.Data, r["Chave de acesso"], r["NF-e/NFC-e"], r.Valor, r["Discriminação dos itens"], r.Status]);
-    const totalRow = [["VALOR TOTAL DA VENDA DO MÊS: " + mes.toUpperCase(), formatCurrency(totalVal), "", "", "", ""]];
+    const dataRows = rows.map((r) => headers.map((h) => r[h] ?? ""));
+    const totalRow = [[`VALOR TOTAL DA VENDA DO MÊS: ${mes.toUpperCase()}`, formatCurrency(totalVal), ...Array(Math.max(0, headers.length - 2)).fill("")] as (string | number)[]];
     const allData = [...headerData, ...dataRows, ...totalRow];
     const ws = XLSX.utils.aoa_to_sheet(allData);
     const wb = XLSX.utils.book_new();
@@ -287,7 +306,8 @@ export default function DocumentosManager() {
   const exportPdf = () => {
     const { empresa, cnpj, endereco, contato, responsavel, mes } = getExportHeader();
     const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
-    const rows = exportSource.map((r) => ({ data: formatDate(r.dataEmissao), chave: r.chave, numero: r.numero, valor: formatCurrency(r.valorTotal), itens: summarizeItems(r.itens) }));
+    const rows = exportSource.map((r) => getRecordRowFormatted(r, exportFields));
+    const headers = Object.keys(rows[0] ?? {});
     const escapeHtml = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     const headerHtml = `
       <div style="margin-bottom:20px;font-size:12px;line-height:1.6">
@@ -306,7 +326,9 @@ export default function DocumentosManager() {
         VALOR TOTAL DA VENDA DO MÊS: ${escapeHtml(mes.toUpperCase())} — ${escapeHtml(formatCurrency(totalVal))}
       </p>
     `;
-    const html = `<!DOCTYPE html><html><head><title>Prestação de contas</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Prestação de contas - notas fiscais</h1>${headerHtml}<table><thead><tr><th>Data</th><th>Chave de acesso</th><th>NF-e/NFC-e</th><th>Valor</th><th>Discriminação dos itens</th><th>Status</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${escapeHtml(r.data)}</td><td>${escapeHtml(r.chave)}</td><td>${escapeHtml(r.numero)}</td><td>${escapeHtml(r.valor)}</td><td>${escapeHtml(r.itens)}</td><td>Autorizada</td></tr>`).join("")}</tbody></table>${totalHtml}</body></html>`;
+    const thCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
+    const bodyRows = rows.map((r) => `<tr>${headers.map((h) => `<td>${escapeHtml(String(r[h] ?? ""))}</td>`).join("")}</tr>`).join("");
+    const html = `<!DOCTYPE html><html><head><title>Prestação de contas</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Prestação de contas - notas fiscais</h1>${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>${totalHtml}</body></html>`;
     const w = window.open("", "_blank");
     if (!w) return;
     w.document.write(html);
@@ -401,6 +423,15 @@ export default function DocumentosManager() {
               <FileEdit className="size-4" />
               Editar cabeçalho
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => setExportConfigModalOpen(true)}
+            >
+              <Settings2 className="size-4" />
+              Editar exportação
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button className="gap-2" disabled={filteredRecords.length === 0}>
@@ -490,6 +521,12 @@ export default function DocumentosManager() {
         open={headerModalOpen}
         onOpenChange={setHeaderModalOpen}
         onSaved={refetch}
+      />
+      <EditExportModal
+        clientId={selectedClient?.id ?? null}
+        open={exportConfigModalOpen}
+        onOpenChange={setExportConfigModalOpen}
+        onSaved={setExportFields}
       />
     </div>
   );

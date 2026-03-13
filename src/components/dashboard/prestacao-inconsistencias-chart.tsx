@@ -30,7 +30,7 @@ export default function PrestacaoInconsistenciasChart({
     const pending = authorized.filter((r) => !includedMap[r.chave]);
     const included = authorized.filter((r) => includedMap[r.chave]);
     const canceled = clientRecords.filter((r) => r.status === "Cancelada");
-    const cnpjMismatch = clientRecords.filter((r) => r.cnpjMismatch);
+    const cnpjMismatch = clientRecords.filter((r) => r.cnpjMismatch && r.tipo === "venda");
     const inconsistent = [...new Map([...canceled, ...cnpjMismatch].map((r) => [r.chave, r])).values()];
 
     const pendingVal = pending.reduce((a, r) => a + r.valorTotal, 0);

@@ -54,7 +54,7 @@ export default function NotesTableView({ records, onSelectRecord }: NotesTableVi
                       <Badge variant={row.status === "Autorizada" ? "secondary" : "destructive"}>
                         {row.status}
                       </Badge>
-                      {row.cnpjMismatch && (
+                      {row.cnpjMismatch && row.tipo === "venda" && (
                         <Badge variant="outline" className="border-amber-400 text-amber-700 text-xs">
                           CNPJ divergente
                         </Badge>

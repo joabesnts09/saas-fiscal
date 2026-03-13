@@ -8,8 +8,23 @@ async function verifyClientAccess(clientId: string, accountId: string) {
   return prisma.client.findFirst({ where: { id: clientId, accountId } });
 }
 
-function toNfeRecord(row: { chave: string; numero: string; serie: string; dataEmissao: string; valorTotal: number; status: string; emitenteJson: string; itensJson: string }): NfeRecord {
+function toNfeRecord(row: { chave: string; numero: string; serie: string; dataEmissao: string; valorTotal: number; status: string; tipo: string; emitenteJson: string; destinatarioJson?: string | null; itensJson: string }): NfeRecord {
   const emitente = JSON.parse(row.emitenteJson || "{}");
+  const destinatarioRaw = row.destinatarioJson;
+  const destinatario = destinatarioRaw
+    ? (() => {
+        try {
+          const d = JSON.parse(destinatarioRaw) as { cnpj?: string; razaoSocial?: string; endereco?: string };
+          if (!d) return undefined;
+          const rs = d.razaoSocial?.trim();
+          const cn = d.cnpj?.trim();
+          if (!rs && !cn) return undefined;
+          return { cnpj: cn || "—", razaoSocial: rs || "—", endereco: d.endereco };
+        } catch {
+          return undefined;
+        }
+      })()
+    : undefined;
   const itens = JSON.parse(row.itensJson || "[]");
   return {
     chave: row.chave,
@@ -18,10 +33,28 @@ function toNfeRecord(row: { chave: string; numero: string; serie: string; dataEm
     dataEmissao: row.dataEmissao,
     valorTotal: row.valorTotal,
     status: row.status as "Autorizada" | "Cancelada",
+    tipo: (row.tipo || "venda") as NfeRecord["tipo"],
     cnpjMismatch: Boolean(emitente.cnpjMismatch),
     emitente: { cnpj: emitente.cnpj ?? "", razaoSocial: emitente.razaoSocial ?? "", endereco: emitente.endereco },
+    destinatario,
     itens,
   };
+}
+
+const onlyDigitsNotes = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "");
+
+function computeNotaTipo(
+  emitenteCnpj: string | undefined,
+  destinatarioCnpj: string | undefined,
+  clientCnpj: string | null | undefined
+): "venda" | "compra" | "outro" {
+  const cc = onlyDigitsNotes(clientCnpj);
+  if (!cc) return "outro";
+  const ec = onlyDigitsNotes(emitenteCnpj);
+  const dc = onlyDigitsNotes(destinatarioCnpj);
+  if (ec === cc) return "venda";
+  if (dc === cc) return "compra";
+  return "outro";
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -32,7 +65,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const { id: clientId } = await params;
     const client = await verifyClientAccess(clientId, accountId);
     if (!client) return NextResponse.json({ error: "Cliente não encontrado" }, { status: 404 });
-    const notes = await prisma.nfeRecord.findMany({ where: { clientId }, orderBy: { dataEmissao: "desc" } });
+
+    const { searchParams } = new URL(request.url);
+    const tipoFilter = searchParams.get("tipo");
+
+    const where: { clientId: string; tipo?: string } = { clientId };
+    if (tipoFilter && ["venda", "compra", "outro"].includes(tipoFilter)) {
+      where.tipo = tipoFilter;
+    }
+
+    const notes = await prisma.nfeRecord.findMany({ where, orderBy: { dataEmissao: "desc" } });
     return NextResponse.json(notes.map(toNfeRecord));
   } catch (error) {
     console.error("Notes GET error:", error);
@@ -79,9 +121,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     let cnpjMismatchCount = 0;
     const upserts = validRecords.map((r) => {
-      const hasMismatch = !cnpjMatches(r.emitente?.cnpj, client.cnpj);
+      const tipo = computeNotaTipo(r.emitente?.cnpj, r.destinatario?.cnpj, client.cnpj);
+      // Apenas em notas de venda o emitente deve ser a empresa; em compras, o emitente é o fornecedor (CNPJ diferente é esperado)
+      const hasMismatch = tipo === "venda" && !cnpjMatches(r.emitente?.cnpj, client.cnpj);
       if (hasMismatch) cnpjMismatchCount++;
       const emitenteData = { ...(r.emitente ?? {}), cnpjMismatch: hasMismatch };
+      const destinatarioData = r.destinatario ? JSON.stringify(r.destinatario) : null;
       return prisma.nfeRecord.upsert({
         where: { clientId_chave: { clientId, chave: r.chave } },
         create: {
@@ -92,7 +137,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           dataEmissao: r.dataEmissao ?? "",
           valorTotal: r.valorTotal ?? 0,
           status: r.status ?? "Autorizada",
+          tipo,
           emitenteJson: JSON.stringify(emitenteData),
+          destinatarioJson: destinatarioData,
           itensJson: JSON.stringify(r.itens ?? []),
         },
         update: {
@@ -101,7 +148,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           dataEmissao: r.dataEmissao ?? "",
           valorTotal: r.valorTotal ?? 0,
           status: r.status ?? "Autorizada",
+          tipo,
           emitenteJson: JSON.stringify(emitenteData),
+          destinatarioJson: destinatarioData,
           itensJson: JSON.stringify(r.itens ?? []),
         },
       });
@@ -111,9 +160,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const duplicateCount = validRecords.filter((r) => existingChaves.has(r.chave)).length;
 
     // Motor de análise fiscal: analisar cada nota e persistir alertas
-    const allAlerts: { clientId: string; chave: string; itemIndex: number | null; productId: string | null; tipo: string; descricao: string; nivel: string; detalhes: string | null }[] = [];
+    const allAlerts: { clientId: string; chave: string; itemIndex: number | null; productId: string | null; tipo: string; notaTipo: string | null; descricao: string; nivel: string; detalhes: string | null }[] = [];
     for (const r of validRecords) {
-      const alerts = analyzeFiscal(r, { cnpj: client.cnpj });
+      const notaTipo = computeNotaTipo(r.emitente?.cnpj, r.destinatario?.cnpj, client.cnpj);
+      const alerts = analyzeFiscal({ ...r, tipo: notaTipo }, { cnpj: client.cnpj });
       for (const a of alerts) {
         allAlerts.push({
           clientId,
@@ -121,6 +171,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           itemIndex: a.itemIndex ?? null,
           productId: a.productId ?? null,
           tipo: a.tipo,
+          notaTipo,
           descricao: a.descricao,
           nivel: a.nivel,
           detalhes: a.detalhes ? JSON.stringify(a.detalhes) : null,

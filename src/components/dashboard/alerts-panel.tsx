@@ -15,7 +15,7 @@ type AlertsPanelProps = {
 
 export default function AlertsPanel({ records, metrics }: AlertsPanelProps) {
   const canceled = records.filter((r) => r.status === "Cancelada");
-  const cnpjMismatch = records.filter((r) => r.cnpjMismatch);
+  const cnpjMismatch = records.filter((r) => r.cnpjMismatch && r.tipo === "venda");
   const hasAlerts = canceled.length > 0 || cnpjMismatch.length > 0;
 
   return (
