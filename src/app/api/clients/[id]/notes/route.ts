@@ -8,7 +8,10 @@ async function verifyClientAccess(clientId: string, accountId: string) {
   return prisma.client.findFirst({ where: { id: clientId, accountId } });
 }
 
-function toNfeRecord(row: { chave: string; numero: string; serie: string; dataEmissao: string; valorTotal: number; status: string; tipo: string; emitenteJson: string; destinatarioJson?: string | null; itensJson: string }): NfeRecord {
+function toNfeRecord(
+  row: { chave: string; numero: string; serie: string; dataEmissao: string; valorTotal: number; status: string; tipo: string; emitenteJson: string; destinatarioJson?: string | null; itensJson: string },
+  clientCnpj?: string | null
+): NfeRecord {
   const emitente = JSON.parse(row.emitenteJson || "{}");
   const destinatarioRaw = row.destinatarioJson;
   const destinatario = destinatarioRaw
@@ -26,6 +29,10 @@ function toNfeRecord(row: { chave: string; numero: string; serie: string; dataEm
       })()
     : undefined;
   const itens = JSON.parse(row.itensJson || "[]");
+  const destCnpj = destinatario?.cnpj;
+  const computedTipo = clientCnpj
+    ? computeNotaTipo(emitente?.cnpj, destCnpj === "—" ? undefined : destCnpj, clientCnpj)
+    : (row.tipo || "venda");
   return {
     chave: row.chave,
     numero: row.numero,
@@ -33,7 +40,7 @@ function toNfeRecord(row: { chave: string; numero: string; serie: string; dataEm
     dataEmissao: row.dataEmissao,
     valorTotal: row.valorTotal,
     status: row.status as "Autorizada" | "Cancelada",
-    tipo: (row.tipo || "venda") as NfeRecord["tipo"],
+    tipo: computedTipo as NfeRecord["tipo"],
     cnpjMismatch: Boolean(emitente.cnpjMismatch),
     emitente: { cnpj: emitente.cnpj ?? "", razaoSocial: emitente.razaoSocial ?? "", endereco: emitente.endereco },
     destinatario,
@@ -49,11 +56,12 @@ function computeNotaTipo(
   clientCnpj: string | null | undefined
 ): "venda" | "compra" | "outro" {
   const cc = onlyDigitsNotes(clientCnpj);
-  if (!cc) return "outro";
+  if (!cc || cc.length < 11) return "outro";
   const ec = onlyDigitsNotes(emitenteCnpj);
   const dc = onlyDigitsNotes(destinatarioCnpj);
   if (ec === cc) return "venda";
   if (dc === cc) return "compra";
+  if ((!dc || dc.length < 11) && ec && ec.length >= 11 && ec !== cc) return "compra";
   return "outro";
 }
 
@@ -69,13 +77,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const { searchParams } = new URL(request.url);
     const tipoFilter = searchParams.get("tipo");
 
-    const where: { clientId: string; tipo?: string } = { clientId };
-    if (tipoFilter && ["venda", "compra", "outro"].includes(tipoFilter)) {
-      where.tipo = tipoFilter;
-    }
-
-    const notes = await prisma.nfeRecord.findMany({ where, orderBy: { dataEmissao: "desc" } });
-    return NextResponse.json(notes.map(toNfeRecord));
+    const notes = await prisma.nfeRecord.findMany({
+      where: { clientId },
+      orderBy: { dataEmissao: "desc" },
+    });
+    const records = notes.map((n) => toNfeRecord(n, client?.cnpj ?? null));
+    const filtered =
+      tipoFilter && ["venda", "compra", "outro"].includes(tipoFilter)
+        ? records.filter((r) => r.tipo === tipoFilter)
+        : records;
+    return NextResponse.json(filtered);
   } catch (error) {
     console.error("Notes GET error:", error);
     return NextResponse.json({ error: "Erro ao buscar notas" }, { status: 500 });

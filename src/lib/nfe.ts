@@ -229,7 +229,8 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
     for (const k of keys) {
       const v = o[k];
       if (v != null && v !== "") {
-        if (typeof v === "string") return v;
+        if (typeof v === "string") return v.trim();
+        if (typeof v === "number") return String(v);
         if (typeof v === "object" && v !== null) {
           const textVal = (v as Record<string, unknown>)["#text"];
           if (textVal != null) return String(textVal).trim();
@@ -249,8 +250,8 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
     valorTotal: parseNumber(total?.vNF ?? 0),
     status: cancelada ? "Cancelada" : "Autorizada",
     emitente: {
-      cnpj: String(emit?.CNPJ ?? ""),
-      razaoSocial: String(emit?.xNome ?? ""),
+      cnpj: pick(emit as Record<string, unknown>, "CNPJ", "cnpj") || String(emit?.CNPJ ?? ""),
+      razaoSocial: pick(emit as Record<string, unknown>, "xNome", "xnome") || String(emit?.xNome ?? ""),
       endereco,
     },
     destinatario: destDoc || destNome

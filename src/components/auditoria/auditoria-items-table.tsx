@@ -6,6 +6,13 @@ import AuditoriaItemDetailsDialog from "./auditoria-item-details-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -45,7 +52,8 @@ export default function AuditoriaItemsTable({
   deleteMonthDisabled = true,
   clientCnpj,
 }: Props) {
-  const [ncmSearch, setNcmSearch] = useState("");
+  const [itemSearch, setItemSearch] = useState("");
+  const [tipoFilter, setTipoFilter] = useState<"all" | "compra" | "venda">("all");
   const [selectedItem, setSelectedItem] = useState<{ chave: string; itemIndex: number } | null>(null);
 
   const alertMap = useMemo(() => {
@@ -90,13 +98,41 @@ export default function AuditoriaItemsTable({
   }, [records, alertMap]);
 
   const filteredItems = useMemo(() => {
-    const search = ncmSearch.trim().replace(/\D/g, "");
-    if (!search || search.length < 2) return flatItems;
-    return flatItems.filter(({ item }) => {
-      const itemNcm = (item.ncm ?? "").replace(/\D/g, "");
-      return itemNcm.includes(search) || search.includes(itemNcm);
+    const onlyDigits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "");
+    const cc = onlyDigits(clientCnpj);
+
+    let items = flatItems;
+
+    if (tipoFilter !== "all") {
+      items = items.filter(({ tipo, emitente, destinatario }) => {
+        const destCnpjRaw = destinatario?.cnpj?.trim() && destinatario.cnpj !== "—" ? destinatario.cnpj : null;
+        const destCnpj = destCnpjRaw ?? (
+          (tipo === "compra" || tipo === "outro") && clientCnpj && cc.length === 14 ? clientCnpj : null
+        );
+        const ec = onlyDigits(emitente?.cnpj);
+        const dc = onlyDigits(destCnpj ?? destinatario?.cnpj);
+        const displayTipo: "compra" | "venda" | "outro" =
+          tipo === "compra" || tipo === "venda"
+            ? tipo
+            : cc && (ec === cc || dc === cc)
+              ? ec === cc ? "venda" : "compra"
+              : "outro";
+        return displayTipo === tipoFilter;
+      });
+    }
+
+    const search = itemSearch.trim().replace(/\D/g, "");
+    if (!search || search.length < 2) return items;
+    return items.filter(({ item }) => {
+      const ncm = (item.ncm ?? "").replace(/\D/g, "");
+      const cest = (item.cest ?? "").replace(/\D/g, "");
+      const cfop = (item.cfop ?? "").replace(/\D/g, "");
+      const matchNcm = ncm && (ncm.includes(search) || search.includes(ncm));
+      const matchCest = cest && (cest.includes(search) || search.includes(cest));
+      const matchCfop = cfop && (cfop.includes(search) || search.includes(cfop));
+      return matchNcm || matchCest || matchCfop;
     });
-  }, [flatItems, ncmSearch]);
+  }, [flatItems, itemSearch, tipoFilter, clientCnpj]);
 
   const renderNomeComCnpj = (razaoSocial?: string, cnpj?: string) => {
     const nome = razaoSocial?.trim() || "—";
@@ -142,12 +178,23 @@ export default function AuditoriaItemsTable({
       <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <CardTitle>Análise por itens</CardTitle>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="text-xs text-slate-500">Buscar NCM</label>
+          <label className="text-xs text-slate-500">Operação</label>
+          <Select value={tipoFilter} onValueChange={(v) => setTipoFilter(v as "all" | "compra" | "venda")}>
+            <SelectTrigger className="w-[140px]">
+              <SelectValue placeholder="Todas" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas</SelectItem>
+              <SelectItem value="compra">Compra</SelectItem>
+              <SelectItem value="venda">Venda</SelectItem>
+            </SelectContent>
+          </Select>
+          <label className="text-xs text-slate-500">Buscar NCM, CEST ou CFOP</label>
           <Input
-            placeholder="Ex: 28043000"
-            className="w-[180px] font-mono text-sm"
-            value={ncmSearch}
-            onChange={(e) => setNcmSearch(e.target.value)}
+            placeholder="Ex: 28043000, 1200300, 6102"
+            className="w-[240px] font-mono text-sm"
+            value={itemSearch}
+            onChange={(e) => setItemSearch(e.target.value)}
           />
           {onDeleteMonth && (
             <Button
@@ -204,7 +251,7 @@ export default function AuditoriaItemsTable({
                   <TableCell colSpan={13} className="py-8 text-center text-slate-500">
                     {flatItems.length === 0
                       ? "Nenhum item para exibir. Importe XMLs em Documentos fiscais."
-                      : "Nenhum item encontrado para o NCM informado."}
+                      : "Nenhum item encontrado para NCM, CEST ou CFOP informado."}
                   </TableCell>
                 </TableRow>
               ) : (
