@@ -326,12 +326,12 @@ export default function AuditoriaItemsTable({
                         ? ec === cc ? "venda" : "compra"
                         : "outro";
                   return (
-                  <TableRow
-                    key={`${chave}-${itemIndex}`}
-                    className="cursor-pointer hover:bg-slate-50 transition-colors"
-                    onClick={() => setSelectedItem({ chave, itemIndex })}
-                  >
-                    <TableCell className="font-medium">
+                  <TableRow key={`${chave}-${itemIndex}`}>
+                    <TableCell
+                      className="font-medium cursor-pointer hover:bg-slate-100 transition-colors"
+                      onClick={() => setSelectedItem({ chave, itemIndex })}
+                      title="Clique para ver detalhes do item"
+                    >
                       <Badge
                         variant="outline"
                         title={displayTipo === "compra" ? "Compra" : displayTipo === "venda" ? "Venda" : "Outro"}
