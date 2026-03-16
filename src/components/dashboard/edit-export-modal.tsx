@@ -17,7 +17,7 @@ import {
   EXPORT_FIELD_LABELS,
   type ExportFieldKey,
 } from "@/lib/export-config";
-import { GripVertical, Loader2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, GripVertical, Loader2, X } from "lucide-react";
 import { toast } from "@/lib/toast";
 
 type EditExportModalProps = {
@@ -40,6 +40,7 @@ export default function EditExportModal({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [activeFieldIndex, setActiveFieldIndex] = useState<number | null>(null);
 
   const availableFields = EXPORT_FIELD_KEYS.filter((k) => !selectedFields.includes(k));
 
@@ -68,19 +69,34 @@ export default function EditExportModal({
     });
   };
 
-  const handleRemoveField = (index: number) => {
+  const handleRemoveField = (index: number, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     setSelectedFields((prev) => prev.filter((_, i) => i !== index));
+    if (activeFieldIndex === index) setActiveFieldIndex(null);
+    else if (activeFieldIndex != null && activeFieldIndex > index) setActiveFieldIndex(activeFieldIndex - 1);
   };
 
   const handleMoveField = (fromIndex: number, toIndex: number) => {
     if (fromIndex === toIndex) return;
+    const clampedTo = Math.max(0, Math.min(toIndex, selectedFields.length - 1));
     setSelectedFields((prev) => {
       const arr = [...prev];
       const [removed] = arr.splice(fromIndex, 1);
-      const insertAt = fromIndex < toIndex ? toIndex - 1 : toIndex;
+      const insertAt = fromIndex < clampedTo ? clampedTo : clampedTo;
       arr.splice(Math.min(insertAt, arr.length), 0, removed!);
       return arr;
     });
+    setActiveFieldIndex(clampedTo);
+  };
+
+  const handleMoveActiveLeft = () => {
+    if (activeFieldIndex == null || activeFieldIndex <= 0) return;
+    handleMoveField(activeFieldIndex, activeFieldIndex - 1);
+  };
+
+  const handleMoveActiveRight = () => {
+    if (activeFieldIndex == null || activeFieldIndex >= selectedFields.length - 1) return;
+    handleMoveField(activeFieldIndex, activeFieldIndex + 1);
   };
 
   const handleDragStart = (e: React.DragEvent, type: "available" | "selected", value: string | number) => {
@@ -184,33 +200,54 @@ export default function EditExportModal({
 
             {/* Painel direito: colunas da tabela (estilo tabela) */}
             <div className="min-w-0">
-              <p className="mb-2 text-xs font-medium text-slate-500">Colunas da exportação</p>
+              <p className="mb-2 text-xs font-medium text-slate-500">
+                Colunas da exportação — clique em um campo para selecionar (clique novamente para desmarcar)
+              </p>
               <div className="min-h-[140px] rounded-lg border-2 border-dashed border-slate-200 bg-white p-3">
                 <div className="flex flex-wrap items-stretch gap-2">
                   {selectedFields.map((key, index) => (
                     <div
                       key={`${key}-${index}`}
                       draggable
+                      role="button"
+                      tabIndex={0}
+                      onClick={() =>
+                        setActiveFieldIndex((current) => (current === index ? null : index))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setActiveFieldIndex((current) =>
+                            current === index ? null : index,
+                          );
+                        }
+                      }}
                       onDragStart={(e) => handleDragStart(e, "selected", index)}
                       onDragOver={(e) => handleDragOver(e, index)}
                       onDragLeave={handleDragLeave}
                       onDrop={(e) => handleDrop(e, index)}
                       className={`flex min-w-[100px] cursor-grab flex-col items-center justify-between gap-1 rounded-md border px-3 py-2 text-center text-sm shadow-sm active:cursor-grabbing ${
-                        dragOverIndex === index ? "border-emerald-400 bg-emerald-50" : "border-slate-200 bg-slate-50"
+                        activeFieldIndex === index
+                          ? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200"
+                          : dragOverIndex === index
+                            ? "border-emerald-400 bg-emerald-50"
+                            : "border-slate-200 bg-slate-50"
                       }`}
                     >
                       <div className="flex w-full items-center justify-between gap-1">
                         <GripVertical className="size-3.5 shrink-0 text-slate-400" />
                         <button
                           type="button"
-                          onClick={() => handleRemoveField(index)}
+                          onClick={(e) => handleRemoveField(index, e)}
                           className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
                           aria-label="Remover"
                         >
                           <X className="size-3.5" />
                         </button>
                       </div>
-                      <span className="w-full truncate text-xs font-medium">{EXPORT_FIELD_LABELS[key]}</span>
+                      <span className="w-full truncate text-xs font-medium">
+                        {EXPORT_FIELD_LABELS[key]}
+                      </span>
                     </div>
                   ))}
                   <div
@@ -237,10 +274,41 @@ export default function EditExportModal({
           </div>
         )}
 
-        <DialogFooter className="flex flex-wrap gap-2 sm:justify-between">
+        <DialogFooter className="flex flex-wrap items-center gap-3 sm:justify-between">
           <Button type="button" variant="ghost" size="sm" onClick={handleRestoreDefault} disabled={loading}>
             Restaurar padrão
           </Button>
+          <div className="flex flex-1 items-center justify-end gap-2">
+            {activeFieldIndex != null && selectedFields.length > 0 && (
+              <>
+                <span className="hidden text-xs text-slate-600 sm:inline">
+                  Movendo &quot;{EXPORT_FIELD_LABELS[selectedFields[activeFieldIndex]!]}&quot;
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 shrink-0 p-0 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                  onClick={handleMoveActiveLeft}
+                  disabled={activeFieldIndex <= 0}
+                  aria-label="Mover para a esquerda"
+                >
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 shrink-0 p-0 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                  onClick={handleMoveActiveRight}
+                  disabled={activeFieldIndex >= selectedFields.length - 1}
+                  aria-label="Mover para a direita"
+                >
+                  <ChevronRight className="size-4" />
+                </Button>
+              </>
+            )}
+          </div>
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancelar
