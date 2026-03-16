@@ -18,6 +18,7 @@ import {
   type ExportFieldKey,
 } from "@/lib/export-config";
 import { ChevronLeft, ChevronRight, GripVertical, Loader2, X } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
 
 type EditExportModalProps = {
@@ -173,8 +174,25 @@ export default function EditExportModal({
         </DialogHeader>
 
         {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="size-8 animate-spin text-slate-400" />
+          <div className="grid grid-cols-[240px_1fr] gap-6">
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <Skeleton className="mb-2 h-4 w-32" />
+              <div className="flex flex-col gap-1.5">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <Skeleton key={i} className="h-10 w-full rounded-md" />
+                ))}
+              </div>
+            </div>
+            <div className="min-w-0">
+              <Skeleton className="mb-2 h-4 w-56" />
+              <div className="min-h-[140px] rounded-lg border-2 border-dashed border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap gap-2">
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <Skeleton key={i} className="h-14 w-24 shrink-0 rounded-md" />
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-[240px_1fr] gap-6">
