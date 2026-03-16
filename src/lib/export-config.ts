@@ -10,6 +10,7 @@ export const EXPORT_FIELD_KEYS = [
   "destinatario",
   "numero",
   "serie",
+  "productId",
   "valor",
   "itens",
   "status",
@@ -18,6 +19,12 @@ export const EXPORT_FIELD_KEYS = [
   "ncm",
   "cfop",
   "baseCalculo",
+  "cstICMS",
+  "cstPIS",
+  "cstCOFINS",
+  "cstIPI",
+  "cbs",
+  "ibs",
   "vICMS",
   "vPIS",
   "vCOFINS",
@@ -32,6 +39,7 @@ export const EXPORT_FIELD_LABELS: Record<ExportFieldKey, string> = {
   destinatario: "Destinatário",
   numero: "NF-e/NFC-e",
   serie: "Série",
+  productId: "ID Produto",
   valor: "Valor",
   itens: "Descrição dos itens",
   status: "Status",
@@ -40,6 +48,12 @@ export const EXPORT_FIELD_LABELS: Record<ExportFieldKey, string> = {
   ncm: "NCM",
   cfop: "CFOP",
   baseCalculo: "Base de cálculo ICMS",
+  cstICMS: "CST ICMS",
+  cstPIS: "CST PIS",
+  cstCOFINS: "CST COFINS",
+  cstIPI: "CST IPI",
+  cbs: "CBS",
+  ibs: "IBS",
   vICMS: "ICMS",
   vPIS: "PIS",
   vCOFINS: "COFINS",
@@ -79,6 +93,9 @@ export function getRecordRow(
     destinatario: fmtDoc(record.destinatario),
     numero: record.numero,
     serie: record.serie,
+    productId: Array.from(
+      new Set(record.itens.map((i) => String(i.productId ?? "").trim()).filter(Boolean)),
+    ).join("; "),
     valor: record.valorTotal,
     itens: summarizeItems(record.itens),
     status: record.status,
@@ -90,6 +107,20 @@ export function getRecordRow(
     vICMS: record.itens.reduce((a, i) => a + (i.vICMS ?? 0), 0),
     vPIS: record.itens.reduce((a, i) => a + (i.vPIS ?? 0), 0),
     vCOFINS: record.itens.reduce((a, i) => a + (i.vCOFINS ?? 0), 0),
+    cstICMS: Array.from(
+      new Set(record.itens.map((i) => (i.cst ?? "").trim()).filter(Boolean)),
+    ).join("; "),
+    cstPIS: Array.from(
+      new Set(record.itens.map((i) => (i.cstPis ?? "").trim()).filter(Boolean)),
+    ).join("; "),
+    cstCOFINS: Array.from(
+      new Set(record.itens.map((i) => (i.cstCofins ?? "").trim()).filter(Boolean)),
+    ).join("; "),
+    cstIPI: Array.from(
+      new Set(record.itens.map((i) => (i.cstIpi ?? "").trim()).filter(Boolean)),
+    ).join("; "),
+    cbs: "", // CBS ainda não mapeado
+    ibs: "", // IBS ainda não mapeado
   };
 
   const result: Record<string, string | number> = {};
@@ -166,6 +197,7 @@ export function getRecordRowsByItem(
       ...notaBase,
       valor,
       itens: item ? item.description : "—",
+      productId: item?.productId ?? "",
       cest: item?.cest?.trim() ?? "—",
       ncm: item?.ncm?.trim() ?? "—",
       cfop: item?.cfop?.trim() ?? "—",
@@ -173,6 +205,12 @@ export function getRecordRowsByItem(
       vICMS: item?.vICMS ?? 0,
       vPIS: item?.vPIS ?? 0,
       vCOFINS: item?.vCOFINS ?? 0,
+      cstICMS: item?.cst?.trim() ?? "—",
+      cstPIS: item?.cstPis?.trim() ?? "—",
+      cstCOFINS: item?.cstCofins?.trim() ?? "—",
+      cstIPI: item?.cstIpi?.trim() ?? "—",
+      cbs: "—",
+      ibs: "—",
     };
 
     const result: Record<string, string | number> = {};

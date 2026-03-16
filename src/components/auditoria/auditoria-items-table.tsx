@@ -277,6 +277,7 @@ export default function AuditoriaItemsTable({
               <col className="w-[95px]" />
               <col className="w-[85px]" />
               <col className="w-[95px]" />
+              <col className="w-[95px]" />
               <col className="w-[70px]" />
             </colgroup>
             <TableHeader>
@@ -293,13 +294,14 @@ export default function AuditoriaItemsTable({
                 <TableHead className="text-right whitespace-nowrap">ICMS</TableHead>
                 <TableHead className="text-right whitespace-nowrap">PIS</TableHead>
                 <TableHead className="text-right whitespace-nowrap">COFINS</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Valor item</TableHead>
                 <TableHead className="whitespace-nowrap">Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredItems.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={13} className="py-8 text-center text-slate-500">
+                  <TableCell colSpan={14} className="py-8 text-center text-slate-500">
                     {flatItems.length === 0
                       ? "Nenhum item para exibir. Importe XMLs em Documentos fiscais."
                       : "Nenhum item encontrado para NCM, CEST ou CFOP informado."}
@@ -358,6 +360,9 @@ export default function AuditoriaItemsTable({
                     <TableCell className="text-right text-sm tabular-nums whitespace-nowrap">{formatCurrency(item.vICMS ?? 0)}</TableCell>
                     <TableCell className="text-right text-sm tabular-nums whitespace-nowrap">{formatCurrency(item.vPIS ?? 0)}</TableCell>
                     <TableCell className="text-right text-sm tabular-nums whitespace-nowrap">{formatCurrency(item.vCOFINS ?? 0)}</TableCell>
+                    <TableCell className="text-right text-sm tabular-nums whitespace-nowrap">
+                      {formatCurrency(item.vProd ?? 0)}
+                    </TableCell>
                     <TableCell className="whitespace-nowrap">{getStatusBadge(alert)}</TableCell>
                   </TableRow>
                 );})

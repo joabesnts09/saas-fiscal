@@ -185,8 +185,8 @@ export default function EditExportModal({
             {/* Painel direito: colunas da tabela (estilo tabela) */}
             <div className="min-w-0">
               <p className="mb-2 text-xs font-medium text-slate-500">Colunas da exportação</p>
-              <div className="min-h-[140px] overflow-x-auto rounded-lg border-2 border-dashed border-slate-200 bg-white p-3">
-                <div className="flex min-w-max items-stretch gap-2">
+              <div className="min-h-[140px] rounded-lg border-2 border-dashed border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-stretch gap-2">
                   {selectedFields.map((key, index) => (
                     <div
                       key={`${key}-${index}`}
@@ -214,9 +214,17 @@ export default function EditExportModal({
                     </div>
                   ))}
                   <div
-                    onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setDragOverIndex(-1); }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setDragOverIndex(-1);
+                    }}
                     onDragLeave={() => setDragOverIndex(null)}
-                    onDrop={(e) => { e.preventDefault(); setDragOverIndex(null); handleDropZone(e); }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragOverIndex(null);
+                      handleDropZone(e);
+                    }}
                     className={`flex min-w-[120px] shrink-0 items-center justify-center rounded-md border-2 border-dashed px-3 py-4 text-xs text-slate-500 ${
                       dragOverIndex === -1 ? "border-emerald-400 bg-emerald-50" : "border-slate-200"
                     }`}

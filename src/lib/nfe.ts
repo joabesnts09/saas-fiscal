@@ -28,6 +28,8 @@ export type NfeItem = {
   vBCCofins?: number;
   pCOFINS?: number;
   vCOFINS?: number;
+  // IPI
+  cstIpi?: string;
 };
 
 export type NotaTipo = "venda" | "compra" | "outro";
@@ -158,6 +160,7 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
     const icmsGroup = imposto?.ICMS ?? {};
     const pisGroup = imposto?.PIS ?? {};
     const cofinsGroup = imposto?.COFINS ?? {};
+    const ipiGroup = imposto?.IPI ?? {};
 
     // ICMS: pode estar em ICMS00, ICMS10, ICMS20, ICMS40, ICMS51, ICMS60, ICMS90, ICMSSN101, ICMSSN102, ICMSSN500, etc.
     const icmsKeys = Object.keys(icmsGroup).filter((k) => k.startsWith("ICMS"));
@@ -172,6 +175,13 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
     // COFINS: COFINSAliq, COFINSOutr, COFINSNT, COFINSQtde
     const cofinsKeys = Object.keys(cofinsGroup).filter((k) => k.startsWith("COFINS"));
     const cofins = cofinsKeys.length > 0 ? cofinsGroup[cofinsKeys[0]] ?? {} : {};
+
+    // IPI: pode estar em IPITrib, IPI_TRIB, etc.
+    const ipiKeys = Object.keys(ipiGroup);
+    const ipiTribKey =
+      ipiKeys.find((k) => k.toLowerCase().includes("ipitrib")) ??
+      ipiKeys.find((k) => k.toLowerCase().startsWith("ipi"));
+    const ipiTrib = ipiTribKey ? ipiGroup[ipiTribKey] ?? {} : {};
 
     const cfopRaw = prod.CFOP ?? prod.cfop;
     const cfop = Array.isArray(cfopRaw) ? cfopRaw[0] : cfopRaw;
@@ -200,6 +210,7 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
       vBCCofins: parseNumber(cofins?.vBC ?? cofins?.VBC ?? 0),
       pCOFINS: parseNumber(cofins?.pCOFINS ?? cofins?.pCofins ?? cofins?.PCOFINS ?? 0),
       vCOFINS: parseNumber(cofins?.vCOFINS ?? cofins?.vCofins ?? cofins?.VCOFINS ?? 0),
+      cstIpi: String(ipiTrib?.CST ?? ipiTrib?.cst ?? "").trim() || undefined,
     };
   });
 
