@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +42,8 @@ export default function EditExportModal({
   const [saving, setSaving] = useState(false);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [activeFieldIndex, setActiveFieldIndex] = useState<number | null>(null);
+  const colunasContainerRef = useRef<HTMLDivElement>(null);
+  const moveControlsRef = useRef<HTMLDivElement>(null);
 
   const availableFields = EXPORT_FIELD_KEYS.filter((k) => !selectedFields.includes(k));
 
@@ -163,9 +165,27 @@ export default function EditExportModal({
     setSelectedFields([...DEFAULT_EXPORT_FIELDS]);
   };
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) setActiveFieldIndex(null);
+    onOpenChange(nextOpen);
+  };
+
+  const handleContentClick = (e: React.MouseEvent) => {
+    if (activeFieldIndex == null) return;
+    const target = e.target as Node;
+    const insideColunas = colunasContainerRef.current?.contains(target);
+    const insideMoveControls = moveControlsRef.current?.contains(target);
+    if (!insideColunas && !insideMoveControls) {
+      setActiveFieldIndex(null);
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[95vw] sm:max-w-[1400px]">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className="max-w-[95vw] sm:max-w-[1400px]"
+        onClick={handleContentClick}
+      >
         <DialogHeader>
           <DialogTitle>Editar exportação</DialogTitle>
           <DialogDescription>
@@ -221,7 +241,10 @@ export default function EditExportModal({
               <p className="mb-2 text-xs font-medium text-slate-500">
                 Colunas da exportação — clique em um campo para selecionar (clique novamente para desmarcar)
               </p>
-              <div className="min-h-[140px] rounded-lg border-2 border-dashed border-slate-200 bg-white p-3">
+              <div
+                ref={colunasContainerRef}
+                className="min-h-[140px] rounded-lg border-2 border-dashed border-slate-200 bg-white p-3"
+              >
                 <div className="flex flex-wrap items-stretch gap-2">
                   {selectedFields.map((key, index) => (
                     <div
@@ -296,7 +319,7 @@ export default function EditExportModal({
           <Button type="button" variant="ghost" size="sm" onClick={handleRestoreDefault} disabled={loading}>
             Restaurar padrão
           </Button>
-          <div className="flex flex-1 items-center justify-end gap-2">
+          <div ref={moveControlsRef} className="flex flex-1 items-center justify-end gap-2">
             {activeFieldIndex != null && selectedFields.length > 0 && (
               <>
                 <span className="hidden text-xs text-slate-600 sm:inline">
