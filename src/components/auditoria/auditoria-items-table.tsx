@@ -166,8 +166,7 @@ export default function AuditoriaItemsTable({
     return result;
   }, [records, filteredItems]);
 
-  const hasActiveFilter = itemSearch.trim().length >= 2 || tipoFilter !== "all";
-  const canExportFiltered = hasActiveFilter && filteredRecords.length > 0 && onExportFiltered;
+  const canExportFiltered = filteredRecords.length > 0 && onExportFiltered;
 
   const renderNomeComCnpj = (razaoSocial?: string, cnpj?: string) => {
     const nome = razaoSocial?.trim() || "—";

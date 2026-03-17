@@ -16,7 +16,6 @@ import {
   RefreshCw,
   Settings2,
   ShieldCheck,
-  Trash2,
   TrendingUp,
   UploadCloud,
 } from "lucide-react";
