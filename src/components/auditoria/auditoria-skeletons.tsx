@@ -59,17 +59,27 @@ export function ResumoAnalysisSkeleton() {
 
 export function ChartsSkeleton() {
   return (
-    <div className="grid items-start gap-6 md:grid-cols-2 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {/* ICMS por mês */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="min-h-[240px] rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <Skeleton className="mb-3 h-5 w-36" />
         <div className="flex h-[140px] items-end gap-2">
           {[70, 45, 85, 55, 65].map((pct, i) => (
-            <Skeleton
-              key={i}
-              className="flex-1 rounded-t"
-              style={{ height: `${pct}%` }}
-            />
+            <Skeleton key={i} className="flex-1 rounded-t" style={{ height: `${pct}%` }} />
+          ))}
+        </div>
+        <div className="mt-3 border-t border-slate-100 pt-3">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="mt-1 h-5 w-28" />
+        </div>
+      </div>
+
+      {/* Produtos por mês */}
+      <div className="min-h-[240px] rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <Skeleton className="mb-3 h-5 w-36" />
+        <div className="flex h-[140px] items-end gap-2">
+          {[55, 70, 60, 80, 45].map((pct, i) => (
+            <Skeleton key={i} className="flex-1 rounded-t" style={{ height: `${pct}%` }} />
           ))}
         </div>
         <div className="mt-3 border-t border-slate-100 pt-3">
@@ -79,7 +89,7 @@ export function ChartsSkeleton() {
       </div>
 
       {/* Distribuição CFOP */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="min-h-[240px] rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <Skeleton className="mb-3 h-5 w-40" />
         <div className="flex h-[140px] items-center justify-center">
           <Skeleton className="size-28 rounded-full" />
@@ -97,34 +107,50 @@ export function ChartsSkeleton() {
         </div>
       </div>
 
-      {/* Top NCM + Tributos */}
-      <div className="flex flex-col gap-4 md:col-span-2 lg:col-span-1">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <Skeleton className="mb-3 h-5 w-40" />
-          <div className="space-y-3">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="flex items-center justify-between">
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-6 w-16 rounded" />
-              </div>
-            ))}
+      {/* Tributos totais */}
+      <div className="min-h-[240px] rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <Skeleton className="mb-3 h-5 w-28" />
+        <div className="space-y-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex justify-between">
+              <Skeleton className="h-4 w-12" />
+              <Skeleton className="h-4 w-20" />
+            </div>
+          ))}
+          <Skeleton className="h-px w-full" />
+          <div className="flex justify-between">
+            <Skeleton className="h-4 w-12" />
+            <Skeleton className="h-4 w-24" />
           </div>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <Skeleton className="mb-3 h-5 w-28" />
-          <div className="space-y-3">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="flex justify-between">
-                <Skeleton className="h-4 w-12" />
-                <Skeleton className="h-4 w-20" />
+      </div>
+
+      {/* Participação dos tributos */}
+      <div className="min-h-[240px] rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <Skeleton className="mb-3 h-5 w-44" />
+        <div className="space-y-4">
+          {[65, 85, 50].map((pct, i) => (
+            <div key={i} className="space-y-1">
+              <div className="flex justify-between">
+                <Skeleton className="h-3 w-16" />
+                <Skeleton className="h-3 w-24" />
               </div>
-            ))}
-            <Skeleton className="h-px w-full" />
-            <div className="flex justify-between">
-              <Skeleton className="h-4 w-12" />
-              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-2 w-full rounded-full" style={{ width: `${pct}%` }} />
             </div>
-          </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Top NCM */}
+      <div className="min-h-[240px] rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <Skeleton className="mb-3 h-5 w-40" />
+        <div className="space-y-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="flex items-center justify-between">
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-6 w-16 rounded" />
+            </div>
+          ))}
         </div>
       </div>
     </div>

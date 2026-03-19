@@ -41,7 +41,9 @@ export async function GET(
     const cfopCounts: Record<string, number> = {};
     const ncmCounts: Record<string, number> = {};
     const icmsByMonth: Record<string, number> = {};
+    const itemsByMonth: Record<string, number> = {};
     const ncmCountsFull: Record<string, number> = {};
+    let totalItemsValue = 0;
 
     for (const note of notes) {
       const dataEmissao = note.dataEmissao ?? "";
@@ -61,6 +63,7 @@ export async function GET(
             vICMS?: number;
             vPIS?: number;
             vCOFINS?: number;
+            vProd?: number;
             ncm?: string;
             cfop?: string;
           }>;
@@ -71,14 +74,17 @@ export async function GET(
 
       for (const item of itens) {
         const vICMS = item.vICMS ?? 0;
+        const vProd = item.vProd ?? 0;
 
         if (monthKey && (!anoFilter || monthKey.startsWith(anoFilter))) {
           icmsByMonth[monthKey] = (icmsByMonth[monthKey] ?? 0) + vICMS;
+          itemsByMonth[monthKey] = (itemsByMonth[monthKey] ?? 0) + vProd;
         }
 
         if (!matchesPeriod) continue;
 
         itemsCount++;
+        totalItemsValue += vProd;
         const hasFiscal = !!(item.ncm || item.cfop || (item.vICMS != null && item.vICMS > 0) || (item.vPIS != null && item.vPIS > 0) || (item.vCOFINS != null && item.vCOFINS > 0));
         if (hasFiscal) itemsWithFiscalData++;
 
@@ -113,11 +119,17 @@ export async function GET(
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([mes, valor]) => ({ mes, valor }));
 
+    const itemsByMonthList = Object.entries(itemsByMonth)
+      .filter(([mes]) => !anoFilter || mes.startsWith(anoFilter))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([mes, valor]) => ({ mes, valor }));
+
     return NextResponse.json({
       notesCount,
       vendaCount,
       compraCount,
       itemsCount,
+      totalItemsValue,
       itemsWithFiscalData,
       totalICMS,
       totalPIS,
@@ -125,6 +137,7 @@ export async function GET(
       topCfops,
       topNcms,
       icmsByMonth: icmsByMonthList,
+      itemsByMonth: itemsByMonthList,
       hasFiscalData: itemsWithFiscalData > 0,
     });
   } catch (error) {

@@ -58,6 +58,12 @@ import { useNotes } from "@/contexts/notes-context";
 import AuditoriaCharts from "@/components/auditoria/auditoria-charts";
 import AuditoriaItemsTable from "@/components/auditoria/auditoria-items-table";
 import AuditoriaSkeletons from "@/components/auditoria/auditoria-skeletons";
+import RelatorioAuditoriaModal, {
+  type RelatorioAuditoriaFormData,
+  formatRelatorioForCsv,
+  formatRelatorioHtmlBlock,
+  relatorioRowsForXlsx,
+} from "@/components/auditoria/relatorio-auditoria-modal";
 
 const downloadBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
@@ -139,6 +145,21 @@ function calculateScore(alerts: FiscalAlertRow[]): number {
   return Math.max(0, Math.min(100, score));
 }
 
+function alertsForRecords(records: NfeRecord[], alertsList: FiscalAlertRow[]) {
+  const chaves = new Set(records.map((r) => r.chave));
+  return alertsList.filter((a) => chaves.has(a.chave));
+}
+
+function relatorioSummaryForRecords(records: NfeRecord[], alertsList: FiscalAlertRow[]) {
+  const a = alertsForRecords(records, alertsList);
+  return {
+    score: calculateScore(a),
+    notasAnalisadas: records.length,
+    erros: a.filter((x) => x.nivel === "error").length,
+    avisos: a.filter((x) => x.nivel === "warning").length,
+  };
+}
+
 export default function AuditoriaFiscalPage() {
   const params = useParams();
   const clientId = params?.id as string | undefined;
@@ -159,6 +180,7 @@ export default function AuditoriaFiscalPage() {
     vendaCount?: number;
     compraCount?: number;
     itemsCount: number;
+    totalItemsValue?: number;
     itemsWithFiscalData: number;
     totalICMS: number;
     totalPIS: number;
@@ -166,6 +188,7 @@ export default function AuditoriaFiscalPage() {
     topCfops: { cfop: string; count: number }[];
     topNcms: { ncm: string; count: number }[];
     icmsByMonth: { mes: string; valor: number }[];
+    itemsByMonth?: { mes: string; valor: number }[];
     hasFiscalData: boolean;
   } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -174,6 +197,11 @@ export default function AuditoriaFiscalPage() {
   const [selectedMonth, setSelectedMonth] = useState("");
   const [nivelFilter, setNivelFilter] = useState<string>("all");
   const [notaTipoFilter, setNotaTipoFilter] = useState<string>("all");
+  const [relatorioModalOpen, setRelatorioModalOpen] = useState(false);
+  const [pendingExport, setPendingExport] = useState<{
+    format: "csv" | "xlsx" | "pdf";
+    records: NfeRecord[] | null;
+  } | null>(null);
 
   const fetchNotes = useCallback(async () => {
     if (!clientId) return;
@@ -344,135 +372,115 @@ export default function AuditoriaFiscalPage() {
   }, [monthOptions, selectedMonth]);
 
   const displayNotes = selectedMonth ? monthFilteredNotes : yearFilteredNotes;
-  const getExportHeader = (source: NfeRecord[]) => ({
-    empresa: client?.name ?? "—",
-    cnpj: formatCnpj(client?.cnpj ?? null),
-    endereco: client?.endereco?.trim() || "—",
-    contato: client?.contato?.trim() || "—",
-    responsavel: client?.responsavel?.trim() || "—",
-    periodo: selectedMonth ? (monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth) : (selectedYear ?? ""),
-  });
 
-  const exportCsv = () => {
-    const exportSource = displayNotes;
-    const { empresa, cnpj, endereco, contato, responsavel, periodo } = getExportHeader(exportSource);
-    const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
-    const rows = exportSource.flatMap((r) => getRecordRowsByItemFormatted(r, exportFields, client?.cnpj));
-    const headers = Object.keys(rows[0] ?? {});
-    const headerBlock = [
-      `EMPRESA;${empresa}`,
-      `CNPJ;${cnpj}`,
-      `ENDEREÇO;${endereco}`,
-      `CONTATO;${contato}`,
-      `RESPONSÁVEL;${responsavel}`,
-      `PERÍODO;${periodo}`,
-      "",
-    ].join("\n");
-    const tableRows = [headers.join(";"), ...rows.map((row) => headers.map((h) => `"${String(row[h as keyof typeof row] ?? "").replace(/"/g, '""')}"`).join(";"))];
-    const totalBlock = ["", `VALOR TOTAL: ${periodo};${formatCurrency(totalVal)}`].join("\n");
-    downloadBlob(new Blob(["\ufeff", [headerBlock, ...tableRows, totalBlock].join("\n")], { type: "text/csv;charset=utf-8;" }), "notas-auditoria.csv");
-  };
-
-  const exportXlsx = () => {
-    const exportSource = displayNotes;
-    const { empresa, cnpj, endereco, contato, responsavel, periodo } = getExportHeader(exportSource);
-    const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
-    const rows = exportSource.flatMap((r) => getRecordRowsByItem(r, exportFields, client?.cnpj));
-    const headers = Object.keys(rows[0] ?? {});
-    const headerData = [
-      ["EMPRESA", empresa],
-      ["CNPJ", cnpj],
-      ["ENDEREÇO", endereco],
-      ["CONTATO", contato],
-      ["RESPONSÁVEL", responsavel],
-      ["PERÍODO", periodo],
-      [],
-      headers,
-    ];
-    const dataRows = rows.map((r) => headers.map((h) => r[h] ?? ""));
-    const totalRow = [[`VALOR TOTAL: ${periodo}`, formatCurrency(totalVal), ...Array(Math.max(0, headers.length - 2)).fill("")] as (string | number)[]];
-    const ws = XLSX.utils.aoa_to_sheet([...headerData, ...dataRows, ...totalRow]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Notas");
-    downloadBlob(new Blob([XLSX.write(wb, { type: "array", bookType: "xlsx" })], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), "notas-auditoria.xlsx");
-  };
-
-  const exportPdf = () => {
-    const exportSource = displayNotes;
-    const { empresa, cnpj, endereco, contato, responsavel, periodo } = getExportHeader(exportSource);
-    const totalVal = exportSource.reduce((a, r) => a + r.valorTotal, 0);
-    const rows = exportSource.flatMap((r) => getRecordRowsByItemFormatted(r, exportFields, client?.cnpj));
-    const headers = Object.keys(rows[0] ?? {});
-    const escapeHtml = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-    const headerHtml = `<div style="margin-bottom:20px;font-size:12px;line-height:1.6"><p><strong>EMPRESA:</strong> ${escapeHtml(empresa)}</p><p><strong>CNPJ:</strong> ${escapeHtml(cnpj)}</p><p><strong>ENDEREÇO:</strong> ${escapeHtml(endereco)}</p><p><strong>CONTATO:</strong> ${escapeHtml(contato)}</p><p><strong>RESPONSÁVEL:</strong> ${escapeHtml(responsavel)}</p><p><strong>PERÍODO:</strong> ${escapeHtml(periodo)}</p></div><hr style="border:1px solid #ddd;margin:12px 0" />`;
-    const totalHtml = `<hr style="border:1px solid #ddd;margin:16px 0" /><p style="background:#e5e5e5;padding:10px;font-weight:bold;margin:0">VALOR TOTAL: ${escapeHtml(periodo)} — ${escapeHtml(formatCurrency(totalVal))}</p>`;
-    const thCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
-    const bodyRows = rows.map((r) => `<tr>${headers.map((h) => `<td>${escapeHtml(String(r[h] ?? "")).replace(/\n/g, "<br />")}</td>`).join("")}</tr>`).join("");
-    const html = `<!DOCTYPE html><html><head><title>Notas - Auditoria</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Notas fiscais - Auditoria</h1>${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>${totalHtml}</body></html>`;
-    const w = window.open("", "_blank");
-    if (!w) return;
-    w.document.write(html);
-    w.document.close();
-    w.focus();
-    w.print();
-  };
-
-  const handleExportFiltered = useCallback(
-    (filteredRecords: NfeRecord[], format: "csv" | "xlsx" | "pdf") => {
-      if (filteredRecords.length === 0) {
-        toast.error("Nenhum item para exportar.");
+  const performAuditoriaExport = useCallback(
+    (
+      relatorio: RelatorioAuditoriaFormData,
+      format: "csv" | "xlsx" | "pdf",
+      exportSource: NfeRecord[],
+      filtered: boolean
+    ) => {
+      if (exportSource.length === 0) {
+        toast.error("Nenhuma nota para exportar.");
         return;
       }
-      const periodo = selectedMonth ? (monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth) : (selectedYear ?? "");
-      const rows = filteredRecords.flatMap((r) => getRecordRowsByItemFormatted(r, exportFields, client?.cnpj));
-      const totalVal = filteredRecords.reduce((a, r) => a + r.itens.reduce((s, i) => s + (i.vProd ?? 0), 0), 0);
-      const headerBase = {
-        empresa: client?.name ?? "—",
-        cnpj: formatCnpj(client?.cnpj ?? null),
-        endereco: client?.endereco?.trim() || "—",
-        contato: client?.contato?.trim() || "—",
-        responsavel: client?.responsavel?.trim() || "—",
-        periodo,
-      };
-      const rowsRaw = filteredRecords.flatMap((r) => getRecordRowsByItem(r, exportFields, client?.cnpj));
-      const headers = Object.keys(rows[0] ?? {});
+      const periodo = selectedMonth
+        ? (monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth)
+        : (selectedYear ?? "");
+      const empresa = client?.name ?? "—";
+      const cnpj = formatCnpj(client?.cnpj ?? null);
+      const endereco = client?.endereco?.trim() || "—";
+      const contato = client?.contato?.trim() || "—";
+      const responsavel = client?.responsavel?.trim() || "—";
+      const totalVal = filtered
+        ? exportSource.reduce((a, r) => a + r.itens.reduce((s, i) => s + (i.vProd ?? 0), 0), 0)
+        : exportSource.reduce((a, r) => a + r.valorTotal, 0);
+      const rowsFmt = exportSource.flatMap((r) => getRecordRowsByItemFormatted(r, exportFields, client?.cnpj));
+      const rowsRaw = exportSource.flatMap((r) => getRecordRowsByItem(r, exportFields, client?.cnpj));
+      const headers = Object.keys(rowsFmt[0] ?? {});
+      const relCsv = formatRelatorioForCsv(relatorio);
+      const escapeHtml = (s: string) =>
+        String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      const notesBaseName = filtered ? "notas-auditoria-busca" : "notas-auditoria";
+      const relBaseName = filtered ? "relatorio-auditoria-busca" : "relatorio-auditoria";
+
       if (format === "csv") {
+        // 1) Arquivo do Relatório (apenas texto)
+        downloadBlob(
+          new Blob(["\ufeff", relCsv], { type: "text/csv;charset=utf-8;" }),
+          `${relBaseName}.csv`
+        );
+
+        // 2) Arquivo da Tabela de Notas (sem o relatório)
         const headerBlock = [
-          `EMPRESA;${headerBase.empresa}`,
-          `CNPJ;${headerBase.cnpj}`,
-          `ENDEREÇO;${headerBase.endereco}`,
-          `CONTATO;${headerBase.contato}`,
-          `RESPONSÁVEL;${headerBase.responsavel}`,
-          `PERÍODO;${headerBase.periodo}`,
+          `EMPRESA;${empresa}`,
+          `CNPJ;${cnpj}`,
+          `ENDEREÇO;${endereco}`,
+          `CONTATO;${contato}`,
+          `RESPONSÁVEL;${responsavel}`,
+          `PERÍODO;${periodo}`,
           "",
         ].join("\n");
-        const tableRows = [headers.join(";"), ...rows.map((row) => headers.map((h) => `"${String(row[h as keyof typeof row] ?? "").replace(/"/g, '""')}"`).join(";"))];
+        const tableRows = [
+          headers.join(";"),
+          ...rowsFmt.map((row) =>
+            headers.map((h) => `"${String(row[h as keyof typeof row] ?? "").replace(/"/g, '""')}"`).join(";")
+          ),
+        ];
         const totalBlock = ["", `VALOR TOTAL: ${periodo};${formatCurrency(totalVal)}`].join("\n");
-        downloadBlob(new Blob(["\ufeff", [headerBlock, ...tableRows, totalBlock].join("\n")], { type: "text/csv;charset=utf-8;" }), "notas-auditoria-busca.csv");
+        downloadBlob(
+          new Blob(["\ufeff", [headerBlock, ...tableRows, totalBlock].join("\n")], { type: "text/csv;charset=utf-8;" }),
+          `${notesBaseName}.csv`
+        );
       } else if (format === "xlsx") {
+        // 1) Arquivo do Relatório (apenas a aba "Relatório")
+        const wbRel = XLSX.utils.book_new();
+        const wsRel = XLSX.utils.aoa_to_sheet(relatorioRowsForXlsx(relatorio));
+        XLSX.utils.book_append_sheet(wbRel, wsRel, "Relatório");
+        downloadBlob(
+          new Blob([XLSX.write(wbRel, { type: "array", bookType: "xlsx" })], {
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          }),
+          `${relBaseName}.xlsx`
+        );
+
+        // 2) Arquivo da Tabela (como era antes)
+        const wbNotas = XLSX.utils.book_new();
         const headerData = [
-          ["EMPRESA", headerBase.empresa],
-          ["CNPJ", headerBase.cnpj],
-          ["ENDEREÇO", headerBase.endereco],
-          ["CONTATO", headerBase.contato],
-          ["RESPONSÁVEL", headerBase.responsavel],
-          ["PERÍODO", headerBase.periodo],
+          ["EMPRESA", empresa],
+          ["CNPJ", cnpj],
+          ["ENDEREÇO", endereco],
+          ["CONTATO", contato],
+          ["RESPONSÁVEL", responsavel],
+          ["PERÍODO", periodo],
           [],
           headers,
         ];
         const dataRows = rowsRaw.map((r) => headers.map((h) => r[h] ?? ""));
-        const totalRow = [[`VALOR TOTAL: ${periodo}`, formatCurrency(totalVal), ...Array(Math.max(0, headers.length - 2)).fill("")] as (string | number)[]];
-        const ws = XLSX.utils.aoa_to_sheet([...headerData, ...dataRows, ...totalRow]);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Auditoria");
-        downloadBlob(new Blob([XLSX.write(wb, { type: "array", bookType: "xlsx" })], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), "notas-auditoria-busca.xlsx");
+        const totalRow = [
+          [
+            `VALOR TOTAL: ${periodo}`,
+            formatCurrency(totalVal),
+            ...Array(Math.max(0, headers.length - 2)).fill(""),
+          ] as (string | number)[],
+        ];
+        const wsNotas = XLSX.utils.aoa_to_sheet([...headerData, ...dataRows, ...totalRow]);
+        XLSX.utils.book_append_sheet(wbNotas, wsNotas, filtered ? "Auditoria" : "Notas");
+        downloadBlob(
+          new Blob([XLSX.write(wbNotas, { type: "array", bookType: "xlsx" })], {
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          }),
+          `${notesBaseName}.xlsx`
+        );
       } else {
-        const escapeHtml = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-        const headerHtml = `<div style="margin-bottom:20px;font-size:12px;line-height:1.6"><p><strong>EMPRESA:</strong> ${escapeHtml(headerBase.empresa)}</p><p><strong>CNPJ:</strong> ${escapeHtml(headerBase.cnpj)}</p><p><strong>ENDEREÇO:</strong> ${escapeHtml(headerBase.endereco)}</p><p><strong>CONTATO:</strong> ${escapeHtml(headerBase.contato)}</p><p><strong>RESPONSÁVEL:</strong> ${escapeHtml(headerBase.responsavel)}</p><p><strong>PERÍODO:</strong> ${escapeHtml(headerBase.periodo)}</p></div><hr style="border:1px solid #ddd;margin:12px 0" />`;
+        const relHtml = formatRelatorioHtmlBlock(relatorio, escapeHtml);
+        const headerHtml = `<div style="margin-bottom:20px;font-size:12px;line-height:1.6"><p><strong>EMPRESA:</strong> ${escapeHtml(empresa)}</p><p><strong>CNPJ:</strong> ${escapeHtml(cnpj)}</p><p><strong>ENDEREÇO:</strong> ${escapeHtml(endereco)}</p><p><strong>CONTATO:</strong> ${escapeHtml(contato)}</p><p><strong>RESPONSÁVEL:</strong> ${escapeHtml(responsavel)}</p><p><strong>PERÍODO:</strong> ${escapeHtml(periodo)}</p></div><hr style="border:1px solid #ddd;margin:12px 0" />`;
         const totalHtml = `<hr style="border:1px solid #ddd;margin:16px 0" /><p style="background:#e5e5e5;padding:10px;font-weight:bold;margin:0">VALOR TOTAL: ${escapeHtml(periodo)} — ${escapeHtml(formatCurrency(totalVal))}</p>`;
         const thCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
-        const bodyRows = rows.map((r) => `<tr>${headers.map((h) => `<td>${escapeHtml(String(r[h] ?? "")).replace(/\n/g, "<br />")}</td>`).join("")}</tr>`).join("");
-        const html = `<!DOCTYPE html><html><head><title>Notas - Auditoria</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Notas fiscais - Auditoria</h1>${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>${totalHtml}</body></html>`;
+        const bodyRows = rowsFmt
+          .map((r) => `<tr>${headers.map((h) => `<td>${escapeHtml(String(r[h] ?? "")).replace(/\n/g, "<br />")}</td>`).join("")}</tr>`)
+          .join("");
+        const html = `<!DOCTYPE html><html><head><title>Auditoria fiscal</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px}h1{font-size:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f2f2f2}</style></head><body><h1>Notas fiscais - Auditoria</h1>${relHtml}${headerHtml}<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>${totalHtml}</body></html>`;
         const w = window.open("", "_blank");
         if (!w) return;
         w.document.write(html);
@@ -480,9 +488,35 @@ export default function AuditoriaFiscalPage() {
         w.focus();
         w.print();
       }
-      toast.success(`Exportado: ${filteredRecords.length} nota(s), ${rows.length} item(ns).`);
+      const itemCount = rowsFmt.length;
+      toast.success(
+        format === "csv" || format === "xlsx"
+          ? `Exportados: relatório (${relBaseName}) e tabela (${notesBaseName}) — ${exportSource.length} nota(s), ${itemCount} item(ns).`
+          : filtered
+            ? `Exportado: ${exportSource.length} nota(s), ${itemCount} item(ns) com relatório.`
+            : `Exportado com relatório de auditoria (${itemCount} linhas).`
+      );
     },
-    [client, selectedMonth, selectedYear, monthOptions, exportFields]
+    [client, exportFields, monthOptions, selectedMonth, selectedYear]
+  );
+
+  const openAuditoriaExport = useCallback((format: "csv" | "xlsx" | "pdf", records: NfeRecord[] | null) => {
+    const src = records ?? displayNotes;
+    if (src.length === 0) {
+      toast.error(records ? "Nenhum item para exportar." : "Nenhuma nota no período para exportar.");
+      return;
+    }
+    setPendingExport({ format, records });
+    setRelatorioModalOpen(true);
+  }, [displayNotes]);
+
+  const handleRelatorioConfirm = useCallback(
+    (data: RelatorioAuditoriaFormData) => {
+      if (!pendingExport) return;
+      const source = pendingExport.records ?? displayNotes;
+      performAuditoriaExport(data, pendingExport.format, source, pendingExport.records !== null);
+    },
+    [pendingExport, displayNotes, performAuditoriaExport]
   );
 
   const handleDeleteMonth = useCallback(async () => {
@@ -624,9 +658,9 @@ export default function AuditoriaFiscalPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={exportXlsx}>Excel (.xlsx)</DropdownMenuItem>
-                <DropdownMenuItem onClick={exportCsv}>CSV (.csv)</DropdownMenuItem>
-                <DropdownMenuItem onClick={exportPdf}>PDF</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openAuditoriaExport("xlsx", null)}>Excel (.xlsx)</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openAuditoriaExport("csv", null)}>CSV (.csv)</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openAuditoriaExport("pdf", null)}>PDF</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Button
@@ -834,14 +868,14 @@ export default function AuditoriaFiscalPage() {
                   </CardContent>
                 </Card>
               )}
-              <AuditoriaCharts stats={stats ? { totalICMS: stats.totalICMS, totalPIS: stats.totalPIS, totalCOFINS: stats.totalCOFINS, topCfops: stats.topCfops ?? [], topNcms: stats.topNcms ?? [], icmsByMonth: stats.icmsByMonth ?? [] } : null} />
+              <AuditoriaCharts stats={stats ? { totalICMS: stats.totalICMS, totalPIS: stats.totalPIS, totalCOFINS: stats.totalCOFINS, itemsCount: stats.itemsCount, totalItemsValue: stats.totalItemsValue ?? 0, topCfops: stats.topCfops ?? [], topNcms: stats.topNcms ?? [], icmsByMonth: stats.icmsByMonth ?? [], itemsByMonth: stats.itemsByMonth ?? [] } : null} />
               <AuditoriaItemsTable
                 records={displayNotes}
                 alerts={alertsForDisplay}
                 onDeleteMonth={selectedMonth ? handleDeleteMonth : undefined}
                 deleteMonthLoading={deleteMonthLoading}
                 deleteMonthDisabled={!selectedMonth || monthFilteredNotes.length === 0}
-                onExportFiltered={handleExportFiltered}
+                onExportFiltered={(recs, fmt) => openAuditoriaExport(fmt, recs)}
                 clientCnpj={client?.cnpj}
               />
             </TabsContent>
@@ -889,7 +923,7 @@ export default function AuditoriaFiscalPage() {
                 onDeleteMonth={selectedMonth ? handleDeleteMonth : undefined}
                 deleteMonthLoading={deleteMonthLoading}
                 deleteMonthDisabled={!selectedMonth || monthFilteredNotes.length === 0}
-                onExportFiltered={handleExportFiltered}
+                onExportFiltered={(recs, fmt) => openAuditoriaExport(fmt, recs)}
                 clientCnpj={client?.cnpj}
               />
             </TabsContent>
@@ -1019,6 +1053,30 @@ export default function AuditoriaFiscalPage() {
             open={exportConfigModalOpen}
             onOpenChange={setExportConfigModalOpen}
             onSaved={setExportFields}
+          />
+          <RelatorioAuditoriaModal
+            open={relatorioModalOpen}
+            onOpenChange={(open) => {
+              setRelatorioModalOpen(open);
+              if (!open) setPendingExport(null);
+            }}
+            exportFormatLabel={
+              pendingExport?.format === "csv"
+                ? "CSV"
+                : pendingExport?.format === "pdf"
+                  ? "PDF"
+                  : "Excel (.xlsx)"
+            }
+            summary={relatorioSummaryForRecords(
+              pendingExport ? (pendingExport.records ?? displayNotes) : displayNotes,
+              alerts
+            )}
+            alerts={alertsForRecords(
+              pendingExport ? (pendingExport.records ?? displayNotes) : displayNotes,
+              alerts
+            )}
+            defaultResponsavel={client?.responsavel ?? ""}
+            onConfirm={handleRelatorioConfirm}
           />
         </>
       )}

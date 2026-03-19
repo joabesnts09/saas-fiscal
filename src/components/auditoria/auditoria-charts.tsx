@@ -35,9 +35,12 @@ type Stats = {
   totalICMS: number;
   totalPIS: number;
   totalCOFINS: number;
+  itemsCount: number;
+  totalItemsValue: number;
   topCfops: { cfop: string; count: number }[];
   topNcms: { ncm: string; count: number }[];
   icmsByMonth: { mes: string; valor: number }[];
+  itemsByMonth: { mes: string; valor: number }[];
 };
 
 const CFOP_COLORS = ["#0ea5e9", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#6366f1", "#f97316", "#14b8a6"];
@@ -56,6 +59,15 @@ export default function AuditoriaCharts({ stats }: Props) {
       return { mes: monthLabel, valor, fullMes: mes };
     });
   }, [stats?.icmsByMonth]);
+
+  const itemsChartData = useMemo(() => {
+    if (!stats?.itemsByMonth?.length) return [];
+    return stats.itemsByMonth.map(({ mes, valor }) => {
+      const [, m] = mes.split("-");
+      const monthLabel = MONTH_NAMES[Number(m) - 1] ?? mes;
+      return { mes: monthLabel, valor, fullMes: mes };
+    });
+  }, [stats?.itemsByMonth]);
 
   const cfopChartData = useMemo(() => {
     if (!stats?.topCfops?.length) return [];
@@ -77,9 +89,9 @@ export default function AuditoriaCharts({ stats }: Props) {
   if (!stats) return null;
 
   return (
-    <div className="grid items-start gap-6 md:grid-cols-2 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {/* ICMS por mês */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="mb-3 text-base font-semibold text-slate-900">ICMS por mês</h3>
         {icmsChartData.length > 0 ? (
           <div className="h-[140px] min-h-0">
@@ -109,8 +121,39 @@ export default function AuditoriaCharts({ stats }: Props) {
         )}
       </div>
 
+      {/* Produtos por mês */}
+      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h3 className="mb-3 text-base font-semibold text-slate-900">Produtos por mês</h3>
+        {itemsChartData.length > 0 ? (
+          <div className="h-[140px] min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={itemsChartData} margin={{ top: 16, right: 16, left: 4, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="mes" tick={{ fontSize: 11, fill: "#64748b" }} />
+                <YAxis tickFormatter={(v) => (v >= 1000 ? v / 1000 + "k" : String(v))} tick={{ fontSize: 11, fill: "#64748b" }} />
+                <Tooltip
+                  formatter={(v) => [formatCurrency(Number(v) || 0), "Valor"]}
+                  contentStyle={{ borderRadius: 8, border: "1px solid #e2e8f0" }}
+                />
+                <Bar dataKey="valor" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={36} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p className="py-8 text-center text-sm text-slate-500">Sem dados de produtos por mês</p>
+        )}
+        {itemsChartData.length > 0 && (
+          <div className="mt-3 border-t border-slate-100 pt-3">
+            <p className="text-xs text-slate-500">Total do período</p>
+            <p className="text-sm font-semibold text-slate-900">
+              {formatCurrency(itemsChartData.reduce((a, d) => a + d.valor, 0))}
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* Distribuição de CFOP */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="mb-3 text-base font-semibold text-slate-900">Distribuição de CFOP</h3>
         {cfopChartData.length > 0 ? (
           <div className="h-[140px] min-h-0 cursor-pointer overflow-visible">
@@ -183,47 +226,98 @@ export default function AuditoriaCharts({ stats }: Props) {
         )}
       </div>
 
-      {/* Top NCM e Tributos */}
-      <div className="flex flex-col gap-4 md:col-span-2 lg:col-span-1">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h3 className="mb-3 text-base font-semibold text-slate-900">Top NCM utilizados</h3>
-          {topNcmData.length > 0 ? (
-            <ul className="space-y-2 text-sm">
-              {topNcmData.map(({ ncm, count }) => (
-                <li key={ncm} className="flex items-center justify-between font-mono">
-                  <span className="text-slate-700">{ncm}</span>
-                  <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-600">{count} itens</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="py-4 text-center text-sm text-slate-500">Sem dados de NCM</p>
-          )}
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h3 className="mb-3 text-base font-semibold text-slate-900">Tributos totais</h3>
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-600">ICMS</span>
-              <span className="font-semibold tabular-nums text-slate-900">{formatCurrency(stats.totalICMS)}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-600">PIS</span>
-              <span className="font-semibold tabular-nums text-slate-900">{formatCurrency(stats.totalPIS)}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-600">COFINS</span>
-              <span className="font-semibold tabular-nums text-slate-900">{formatCurrency(stats.totalCOFINS)}</span>
-            </div>
-            <hr className="border-slate-200" />
-            <div className="flex justify-between text-sm font-medium">
-              <span className="text-slate-700">Total</span>
-              <span className="tabular-nums text-slate-900">
-                {formatCurrency(stats.totalICMS + stats.totalPIS + stats.totalCOFINS)}
-              </span>
-            </div>
+      {/* Tributos totais */}
+      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h3 className="mb-3 text-base font-semibold text-slate-900">Tributos totais</h3>
+        <div className="flex-1 space-y-2">
+          <div className="flex justify-between text-sm">
+            <span className="text-slate-600">ICMS</span>
+            <span className="font-semibold tabular-nums text-slate-900">{formatCurrency(stats.totalICMS)}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-slate-600">PIS</span>
+            <span className="font-semibold tabular-nums text-slate-900">{formatCurrency(stats.totalPIS)}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-slate-600">COFINS</span>
+            <span className="font-semibold tabular-nums text-slate-900">{formatCurrency(stats.totalCOFINS)}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-slate-600">Quantidade de itens</span>
+            <span className="font-semibold tabular-nums text-slate-900">
+              {(stats.itemsCount ?? 0).toLocaleString("pt-BR")}
+            </span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-slate-600">Valor total dos itens</span>
+            <span className="font-semibold tabular-nums text-slate-900">
+              {formatCurrency(stats.totalItemsValue ?? 0)}
+            </span>
+          </div>
+          <hr className="border-slate-200" />
+          <div className="flex justify-between text-sm font-medium">
+            <span className="text-slate-700">Total</span>
+            <span className="tabular-nums text-slate-900">
+              {formatCurrency(stats.totalICMS + stats.totalPIS + stats.totalCOFINS)}
+            </span>
           </div>
         </div>
+      </div>
+
+      {/* Participação dos tributos */}
+      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h3 className="mb-3 text-base font-semibold text-slate-900">Participação dos tributos</h3>
+        {(() => {
+          const total = stats.totalICMS + stats.totalPIS + stats.totalCOFINS;
+          if (total <= 0) {
+            return <p className="flex-1 py-8 text-center text-sm text-slate-500">Sem dados de tributos</p>;
+          }
+          const icmsPct = (stats.totalICMS / total) * 100;
+          const pisPct = (stats.totalPIS / total) * 100;
+          const cofinsPct = (stats.totalCOFINS / total) * 100;
+          const bars = [
+            { label: "ICMS", valor: stats.totalICMS, pct: icmsPct, fill: "#0ea5e9" },
+            { label: "PIS", valor: stats.totalPIS, pct: pisPct, fill: "#8b5cf6" },
+            { label: "COFINS", valor: stats.totalCOFINS, pct: cofinsPct, fill: "#ec4899" },
+          ];
+          return (
+            <div className="flex flex-1 flex-col justify-center gap-4">
+              {bars.map(({ label, valor, pct, fill }) => (
+                <div key={label} className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-600">{label}</span>
+                    <span className="font-medium tabular-nums text-slate-900">
+                      {formatCurrency(valor)} ({pct.toFixed(1)}%)
+                    </span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: fill }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Top NCM utilizados */}
+      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h3 className="mb-3 text-base font-semibold text-slate-900">Top NCM utilizados</h3>
+        {topNcmData.length > 0 ? (
+          <ul className="flex-1 space-y-2 text-sm">
+            {topNcmData.map(({ ncm, count }) => (
+              <li key={ncm} className="flex items-center justify-between font-mono">
+                <span className="text-slate-700">{ncm}</span>
+                <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-600">{count} itens</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="flex-1 py-4 text-center text-sm text-slate-500">Sem dados de NCM</p>
+        )}
       </div>
 
       <Dialog open={!!selectedCfop} onOpenChange={(open) => !open && setSelectedCfop(null)}>
