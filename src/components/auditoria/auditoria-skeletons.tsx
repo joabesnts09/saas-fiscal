@@ -11,6 +11,33 @@ import {
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
+/** Colunas da tabela "Análise por itens" (auditoria-items-table) */
+export const AUDITORIA_ITENS_TABLE_COLS = 19;
+
+/** Linhas de skeleton alinhadas ao GET da tabela (1ª carga + `tableLoading`). */
+export function AuditoriaItensTableBodySkeletonRows() {
+  const rows = 10;
+  return (
+    <>
+      {Array.from({ length: rows }).map((_, rowIdx) => (
+        <TableRow key={`aud-sk-${rowIdx}`} className="hover:bg-transparent">
+          {Array.from({ length: AUDITORIA_ITENS_TABLE_COLS }).map((_, colIdx) => (
+            <TableCell key={colIdx}>
+              <Skeleton
+                className={
+                  [1, 2, 3, 4, 5].includes(colIdx)
+                    ? "h-4 w-full min-w-[72px] max-w-[180px]"
+                    : "h-4 w-12"
+                }
+              />
+            </TableCell>
+          ))}
+        </TableRow>
+      ))}
+    </>
+  );
+}
+
 export function SummaryCardsSkeleton() {
   return (
     <div className="mb-6 grid gap-4 md:grid-cols-2 lg:grid-cols-5">
@@ -161,49 +188,47 @@ export function ItemsTableSkeleton() {
   return (
     <Card className="border-slate-200 shadow-sm">
       <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <Skeleton className="h-6 w-40" />
-        <div className="flex items-center gap-2">
-          <Skeleton className="h-9 w-32" />
-          <Skeleton className="h-9 w-28 rounded-md" />
+        <Skeleton className="h-6 w-48" />
+        <div className="flex flex-wrap items-center gap-2 justify-end">
+          <Skeleton className="h-9 w-40" />
+          <Skeleton className="h-9 w-24 rounded-md" />
         </div>
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <Table className="table-fixed min-w-[1200px]">
+          <Table className="table-fixed min-w-[1640px]">
             <colgroup>
               <col className="w-[90px]" />
+              <col className="w-[170px]" />
+              <col className="w-[110px]" />
+              <col className="w-[170px]" />
+              <col className="w-[110px]" />
               <col className="w-[200px]" />
-              <col className="w-[200px]" />
-              <col className="w-[220px]" />
               <col className="w-[100px]" />
               <col className="w-[90px]" />
+              <col className="w-[200px]" />
               <col className="w-[70px]" />
               <col className="w-[50px]" />
               <col className="w-[95px]" />
               <col className="w-[95px]" />
               <col className="w-[85px]" />
               <col className="w-[95px]" />
-              <col className="w-[70px]" />
+              <col className="w-[95px]" />
+              <col className="w-[72px]" />
+              <col className="w-[72px]" />
+              <col className="w-[76px]" />
             </colgroup>
             <TableHeader>
               <TableRow>
-                {Array.from({ length: 13 }).map((_, i) => (
+                {Array.from({ length: AUDITORIA_ITENS_TABLE_COLS }).map((_, i) => (
                   <TableHead key={i}>
-                    <Skeleton className="h-4 w-16" />
+                    <Skeleton className="h-4 w-14" />
                   </TableHead>
                 ))}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {Array.from({ length: 10 }).map((_, rowIdx) => (
-                <TableRow key={rowIdx}>
-                  {Array.from({ length: 13 }).map((_, colIdx) => (
-                    <TableCell key={colIdx}>
-                      <Skeleton className={`h-4 ${[1, 2, 3].includes(colIdx) ? "w-full" : "w-14"}`} />
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
+              <AuditoriaItensTableBodySkeletonRows />
             </TableBody>
           </Table>
         </div>
@@ -212,21 +237,19 @@ export function ItemsTableSkeleton() {
   );
 }
 
+/** Primeira carga: GET de alertas; tabela em skeleton até o GET paginado da tabela. */
 export default function AuditoriaSkeletons() {
   return (
     <div className="space-y-6">
       <SummaryCardsSkeleton />
-      <TabsSkeleton />
-      <div className="space-y-6">
-        <div className="flex items-center gap-2">
-          <Skeleton className="h-4 w-8" />
-          <Skeleton className="h-4 w-10 rounded" />
-          <Skeleton className="h-10 w-[200px] rounded-md" />
-        </div>
-        <ResumoAnalysisSkeleton />
-        <ChartsSkeleton />
-        <ItemsTableSkeleton />
+      <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <Skeleton className="h-9 w-24" />
+        <Skeleton className="h-9 w-32" />
+        <Skeleton className="h-9 w-40" />
+        <Skeleton className="h-3 w-48 flex-1" />
       </div>
+      <TabsSkeleton />
+      <ItemsTableSkeleton />
     </div>
   );
 }

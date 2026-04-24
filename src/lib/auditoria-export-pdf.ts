@@ -226,19 +226,62 @@ export function generateNotasPdf(
   return doc.output("blob");
 }
 
-/** Gera PDF dos Gráficos a partir de data URL (imagem) */
-export function generateGraficosPdf(dataUrl: string): Blob {
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-  doc.setFontSize(16);
-  doc.setFont("helvetica", "bold");
-  doc.text("Gráficos e indicadores", 14, 18);
+/**
+ * Gera PDF dos gráficos: um PNG por cartão (cada `data-auditoria-export-card`) para que
+ * **não haja corte a meio** de um bloco na mudança de página.
+ * Cartões muito altos encolhem para caberem numa página (em vez de serem partidos).
+ */
+export async function generateGraficosPdf(cardPngs: string[]): Promise<Blob> {
+  const loadImage = (dataUrl: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("Não foi possível ler uma imagem de gráfico"));
+      el.src = dataUrl;
+    });
 
-  const pageW = 297;
-  const pageH = 210;
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
   const margin = 14;
-  const imgWidth = pageW - margin * 2;
-  const imgHeight = pageH - 35;
-  doc.addImage(dataUrl, "PNG", margin, 25, imgWidth, imgHeight);
+  const contentW = pageW - 2 * margin;
+  const gap = 3;
+
+  let y = 20;
+  let first = true;
+  for (const dataUrl of cardPngs) {
+    const img = await loadImage(dataUrl);
+    const iw = Math.max(1, img.naturalWidth);
+    const ih = Math.max(1, img.naturalHeight);
+    let wMm = contentW;
+    let hMm = (ih / iw) * wMm;
+
+    if (first) {
+      doc.setFontSize(16);
+      doc.setFont("helvetica", "bold");
+      doc.text("Gráficos e indicadores", margin, 12);
+      y = 20;
+      first = false;
+    }
+
+    let available = pageH - y - margin;
+    if (hMm + gap > available) {
+      if (y > 20) {
+        doc.addPage();
+        y = 14;
+        available = pageH - y - margin;
+      }
+    }
+    if (hMm > available) {
+      const s = available / hMm;
+      hMm = available;
+      wMm = contentW * s;
+    }
+
+    const x = margin + (contentW - wMm) / 2;
+    doc.addImage(dataUrl, "PNG", x, y, wMm, hMm, undefined, "MEDIUM");
+    y += hMm + gap;
+  }
 
   return doc.output("blob");
 }

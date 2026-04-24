@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import JSZip from "jszip";
-import * as XLSX from "xlsx";
 import {
   AlertTriangle,
   AlertCircle,
@@ -48,7 +46,15 @@ import { Badge } from "@/components/ui/badge";
 import ClientSelector from "@/components/client-selector";
 import { useClient } from "@/contexts/client-context";
 import { getAuthHeaders } from "@/lib/auth-client";
-import { formatCnpj, formatCurrency, formatDate, parseNfeXml, type NfeRecord } from "@/lib/nfe";
+import {
+  formatCnpj,
+  formatCurrency,
+  formatDate,
+  parseNfeXml,
+  recordEnvolveClienteCnpj,
+  type NfeRecord,
+} from "@/lib/nfe";
+const AUDITORIA_TABLE_PER_PAGE = 60;
 import { DEFAULT_EXPORT_FIELDS, getRecordRowsByItem, getRecordRowsByItemFormatted, type ExportFieldKey } from "@/lib/export-config";
 import { toast } from "@/lib/toast";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -57,14 +63,18 @@ import EditExportModal from "@/components/dashboard/edit-export-modal";
 import { useNotes } from "@/contexts/notes-context";
 import AuditoriaCharts from "@/components/auditoria/auditoria-charts";
 import AuditoriaItemsTable from "@/components/auditoria/auditoria-items-table";
-import AuditoriaSkeletons from "@/components/auditoria/auditoria-skeletons";
+import AuditoriaSkeletons, { ResumoAnalysisSkeleton } from "@/components/auditoria/auditoria-skeletons";
 import RelatorioAuditoriaModal, {
   type RelatorioAuditoriaFormData,
   formatRelatorioForCsv,
   relatorioRowsForXlsx,
 } from "@/components/auditoria/relatorio-auditoria-modal";
-import { toPng } from "html-to-image";
 import { generateGraficosPdf, generateNotasPdf, generateRelatorioPdf } from "@/lib/auditoria-export-pdf";
+import { captureAuditoriaChartCardPngs } from "@/lib/auditoria-charts-capture";
+import { toast as sonnerToast } from "sonner";
+import { calculateFiscalScoreFromStored } from "@/lib/fiscal-engine";
+import type { ConfazStRow } from "@/lib/confaz-st-core";
+import { confazRowsFromApi, type ConfazStApiItem } from "@/lib/confaz-enrichment";
 
 const downloadBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
@@ -125,6 +135,7 @@ const TIPO_LABEL: Record<string, string> = {
   divergencia_icms: "Divergência de ICMS",
   ncm_invalido: "NCM inválido",
   cest_obrigatorio: "CEST obrigatório",
+  cest_incompativel: "CEST incompatível com NCM (ST)",
   cst_icms_incompativel: "CST/ICMS incompatível",
   bebida_icms_zerado: "Bebida com ICMS zerado",
   cfop_invalido: "CFOP inválido",
@@ -137,13 +148,7 @@ function getTipoLabel(tipo: string): string {
 }
 
 function calculateScore(alerts: FiscalAlertRow[]): number {
-  let score = 100;
-  for (const a of alerts) {
-    if (a.nivel === "error") score -= 10;
-    else if (a.nivel === "warning") score -= 3;
-    else if (a.nivel === "info") score -= 1;
-  }
-  return Math.max(0, Math.min(100, score));
+  return calculateFiscalScoreFromStored(alerts);
 }
 
 function alertsForRecords(records: NfeRecord[], alertsList: FiscalAlertRow[]) {
@@ -166,7 +171,7 @@ export default function AuditoriaFiscalPage() {
   const clientId = params?.id as string | undefined;
   const { clients, selectedClient, refetch } = useClient();
   const client = selectedClient ?? clients.find((c) => c.id === clientId) ?? null;
-  const { addRecords, uploadProgress, deleteByMonth } = useNotes();
+  const { addRecords, uploadProgress, deleteByMonth, deleteByYear, deleteAllNotes } = useNotes();
   const { confirm } = useConfirm();
 
   const [headerModalOpen, setHeaderModalOpen] = useState(false);
@@ -174,9 +179,11 @@ export default function AuditoriaFiscalPage() {
   const [exportFields, setExportFields] = useState<ExportFieldKey[]>(() => [...DEFAULT_EXPORT_FIELDS]);
   const [uploading, setUploading] = useState(false);
   const [notes, setNotes] = useState<NfeRecord[]>([]);
+  const [tableNotes, setTableNotes] = useState<NfeRecord[]>([]);
   const [selectedYear, setSelectedYear] = useState("");
   const [alerts, setAlerts] = useState<FiscalAlertRow[]>([]);
   const [stats, setStats] = useState<{
+    operacao?: "todos" | "venda" | "compra";
     notesCount: number;
     vendaCount?: number;
     compraCount?: number;
@@ -194,8 +201,22 @@ export default function AuditoriaFiscalPage() {
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
-  const [deleteMonthLoading, setDeleteMonthLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState<"month" | "year" | "all" | null>(null);
   const [selectedMonth, setSelectedMonth] = useState("");
+  const [statsOperacao, setStatsOperacao] = useState<"todos" | "venda" | "compra">("todos");
+  const [activeTab, setActiveTab] = useState<"tabela" | "graficos" | "inconsistencias">("tabela");
+  const [tableSearchQuery, setTableSearchQuery] = useState("");
+  const [tablePage, setTablePage] = useState(1);
+  const [tableListMeta, setTableListMeta] = useState<{
+    total: number;
+    page: number;
+    perPage: number;
+    totalPages: number;
+  } | null>(null);
+  const [tableLoading, setTableLoading] = useState(false);
+  const tableFetchAbortRef = useRef<AbortController | null>(null);
+  const tableFilterKeyRef = useRef<string>("");
+  const [statsLoading, setStatsLoading] = useState(true);
   const [nivelFilter, setNivelFilter] = useState<string>("all");
   const [notaTipoFilter, setNotaTipoFilter] = useState<string>("all");
   const [relatorioModalOpen, setRelatorioModalOpen] = useState(false);
@@ -204,6 +225,7 @@ export default function AuditoriaFiscalPage() {
     format: "csv" | "xlsx" | "pdf";
     records: NfeRecord[] | null;
   } | null>(null);
+  const [confazStRows, setConfazStRows] = useState<ConfazStRow[]>([]);
 
   const fetchNotes = useCallback(async () => {
     if (!clientId) return;
@@ -223,12 +245,93 @@ export default function AuditoriaFiscalPage() {
     }
   }, [clientId]);
 
-  const fetchStats = useCallback(async () => {
+  const fetchTableNotes = useCallback(async () => {
     if (!clientId) return;
+    tableFetchAbortRef.current?.abort();
+    const ac = new AbortController();
+    tableFetchAbortRef.current = ac;
+    setTableLoading(true);
+    const filterKey = [clientId, selectedMonth, selectedYear, tableSearchQuery, statsOperacao].join("\0");
+    const usePage = tableFilterKeyRef.current === filterKey ? tablePage : 1;
+    tableFilterKeyRef.current = filterKey;
+    try {
+      const url = new URL(`/api/clients/${clientId}/notes`, window.location.origin);
+      if (tableSearchQuery.trim().length > 0) url.searchParams.set("q", tableSearchQuery.trim());
+      if (selectedMonth) url.searchParams.set("mes", selectedMonth);
+      else if (selectedYear) url.searchParams.set("ano", selectedYear);
+      url.searchParams.set("operacao", statsOperacao);
+      url.searchParams.set("page", String(usePage));
+      url.searchParams.set("perPage", String(AUDITORIA_TABLE_PER_PAGE));
+      const res = await fetch(url.toString(), {
+        signal: ac.signal,
+        headers: getAuthHeaders(),
+        credentials: "include",
+      });
+      if (ac.signal.aborted) return;
+      if (!res.ok) {
+        setTableNotes([]);
+        setTableListMeta({ total: 0, page: 1, perPage: AUDITORIA_TABLE_PER_PAGE, totalPages: 1 });
+        return;
+      }
+      const data = await res.json();
+      if (ac.signal.aborted) return;
+      if (Array.isArray(data)) {
+        setTableNotes(data);
+        setTablePage(1);
+        setTableListMeta({ total: data.length, page: 1, perPage: data.length || AUDITORIA_TABLE_PER_PAGE, totalPages: 1 });
+      } else {
+        const p = (data as { page?: number }).page ?? 1;
+        setTablePage(p);
+        setTableNotes((data as { items?: NfeRecord[] }).items ?? []);
+        setTableListMeta({
+          total: (data as { total?: number }).total ?? 0,
+          page: p,
+          perPage: (data as { perPage?: number }).perPage ?? AUDITORIA_TABLE_PER_PAGE,
+          totalPages: (data as { totalPages?: number }).totalPages ?? 1,
+        });
+      }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      setTableNotes([]);
+      setTableListMeta(null);
+    } finally {
+      if (!ac.signal.aborted) {
+        setTableLoading(false);
+      }
+    }
+  }, [clientId, selectedMonth, selectedYear, tableSearchQuery, tablePage, statsOperacao]);
+
+  const fetchAllNotesForTableQuery = useCallback(async (): Promise<NfeRecord[]> => {
+    if (!clientId) return [];
+    const url = new URL(`/api/clients/${clientId}/notes`, window.location.origin);
+    if (tableSearchQuery.trim().length > 0) url.searchParams.set("q", tableSearchQuery.trim());
+    if (selectedMonth) url.searchParams.set("mes", selectedMonth);
+    else if (selectedYear) url.searchParams.set("ano", selectedYear);
+    url.searchParams.set("operacao", statsOperacao);
+    const res = await fetch(url.toString(), {
+      headers: getAuthHeaders(),
+      credentials: "include",
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray((data as { items?: NfeRecord[] }).items)) {
+      return (data as { items: NfeRecord[] }).items;
+    }
+    return [];
+  }, [clientId, tableSearchQuery, selectedMonth, selectedYear, statsOperacao]);
+
+  const fetchStats = useCallback(async () => {
+    if (!clientId) {
+      setStatsLoading(false);
+      return;
+    }
+    setStatsLoading(true);
     try {
       const url = new URL(`/api/clients/${clientId}/fiscal-stats`, window.location.origin);
       if (selectedMonth) url.searchParams.set("mes", selectedMonth);
       else if (selectedYear) url.searchParams.set("ano", selectedYear);
+      if (statsOperacao !== "todos") url.searchParams.set("operacao", statsOperacao);
       const res = await fetch(url.toString(), {
         headers: getAuthHeaders(),
         credentials: "include",
@@ -241,8 +344,10 @@ export default function AuditoriaFiscalPage() {
       }
     } catch {
       setStats(null);
+    } finally {
+      setStatsLoading(false);
     }
-  }, [clientId, selectedYear, selectedMonth]);
+  }, [clientId, selectedYear, selectedMonth, statsOperacao]);
 
   const fetchAlerts = useCallback(async () => {
     if (!clientId) return;
@@ -274,7 +379,7 @@ export default function AuditoriaFiscalPage() {
       if (!res.ok) throw new Error("Erro ao analisar");
       const data = await res.json();
       toast.success(`${data.analyzed} notas analisadas. ${data.alertsCount} alertas encontrados.`);
-      await Promise.all([fetchNotes(), fetchAlerts(), fetchStats()]);
+      await Promise.all([fetchNotes(), fetchTableNotes(), fetchAlerts(), fetchStats()]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Erro ao reanalisar");
     } finally {
@@ -286,6 +391,7 @@ export default function AuditoriaFiscalPage() {
     if (!files?.length || !selectedClient?.id) return;
     setUploading(true);
     try {
+      const JSZip = (await import("jszip")).default;
       const parsed: NfeRecord[] = [];
       const fileList = Array.from(files);
       for (const file of fileList) {
@@ -305,10 +411,16 @@ export default function AuditoriaFiscalPage() {
           if (r?.chave) parsed.push(r);
         }
       }
-      if (parsed.length > 0) {
-        await addRecords(parsed);
-        await Promise.all([fetchNotes(), fetchAlerts(), fetchStats()]);
-        toast.success(`${parsed.length} nota(s) importada(s).`);
+      const accepted = parsed.filter((r) => recordEnvolveClienteCnpj(r, client?.cnpj));
+      const skipped = parsed.length - accepted.length;
+      if (skipped > 0) {
+        toast.warning(
+          `${skipped} nota(s) ignorada(s): o CNPJ/CPF da empresa cadastrado não consta como emitente nem destinatário.`
+        );
+      }
+      if (accepted.length > 0) {
+        await addRecords(accepted);
+        await Promise.all([fetchNotes(), fetchTableNotes(), fetchAlerts(), fetchStats()]);
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Erro ao importar");
@@ -374,9 +486,19 @@ export default function AuditoriaFiscalPage() {
   }, [monthOptions, selectedMonth]);
 
   const displayNotes = selectedMonth ? monthFilteredNotes : yearFilteredNotes;
+  const tableDisplayNotes = useMemo(() => {
+    const source = tableNotes;
+    if (selectedMonth) {
+      return source.filter((r) => (r.dataEmissao?.trim() ?? "").startsWith(selectedMonth));
+    }
+    if (selectedYear) {
+      return source.filter((r) => (r.dataEmissao?.trim() ?? "").startsWith(selectedYear));
+    }
+    return source;
+  }, [tableNotes, selectedMonth, selectedYear]);
 
   const performAuditoriaExport = useCallback(
-    (
+    async (
       relatorio: RelatorioAuditoriaFormData,
       format: "csv" | "xlsx" | "pdf",
       exportSource: NfeRecord[],
@@ -386,6 +508,7 @@ export default function AuditoriaFiscalPage() {
         toast.error("Nenhuma nota para exportar.");
         return;
       }
+      const XLSX = await import("xlsx");
       const periodo = selectedMonth
         ? (monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth)
         : (selectedYear ?? "");
@@ -408,7 +531,6 @@ export default function AuditoriaFiscalPage() {
       const meta = { empresa, cnpj, endereco, contato, responsavel, periodo, totalVal: formatCurrency(totalVal) };
 
       if (filtered) {
-        // Exportação filtrada (busca): 2 arquivos separados como antes
         if (format === "csv") {
           downloadBlob(new Blob(["\ufeff", relCsv], { type: "text/csv;charset=utf-8;" }), `${relBaseName}.csv`);
           const headerBlock = [`EMPRESA;${empresa}`, `CNPJ;${cnpj}`, `ENDEREÇO;${endereco}`, `CONTATO;${contato}`, `RESPONSÁVEL;${responsavel}`, `PERÍODO;${periodo}`, ""].join("\n");
@@ -432,20 +554,29 @@ export default function AuditoriaFiscalPage() {
           downloadBlob(notasPdf, `${notesBaseName}.pdf`);
         }
       } else {
-        // Exportação geral: .zip com 3 arquivos
-        (async () => {
+        const loadingId = sonnerToast.loading("A exportar: API de estatísticas, captura dos gráficos (demora) e ficheiros…");
+        try {
+          const { default: JSZip } = await import("jszip");
           const zip = new JSZip();
 
           zip.file("relatorio-auditoria-fiscal.pdf", generateRelatorioPdf(relatorio));
 
-          if (chartsContainerRef.current) {
-            try {
-              const dataUrl = await toPng(chartsContainerRef.current, { pixelRatio: 2, cacheBust: true, backgroundColor: "#ffffff" });
-              const graficosPdf = generateGraficosPdf(dataUrl);
+          // 1× toPng + recorte por cartão → PDF sem cortar blocos a meio na mudança de página.
+          try {
+            await fetchStats();
+            await new Promise<void>((r) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => r()));
+            });
+            await new Promise((r) => setTimeout(r, 200));
+            if (chartsContainerRef.current) {
+              const cardPngs = await captureAuditoriaChartCardPngs(chartsContainerRef.current, { pixelRatio: 2.5 });
+              const graficosPdf = await generateGraficosPdf(cardPngs);
               zip.file("graficos-e-indicadores.pdf", graficosPdf);
-            } catch (err) {
-              console.warn("Não foi possível capturar os gráficos:", err);
+            } else {
+              console.warn("Export: ref dos gráficos indisponível.");
             }
+          } catch (err) {
+            console.warn("Não foi possível capturar os gráficos:", err);
           }
 
           if (format === "csv") {
@@ -466,7 +597,9 @@ export default function AuditoriaFiscalPage() {
 
           const zipBlob = await zip.generateAsync({ type: "blob" });
           downloadBlob(zipBlob, `${zipBaseName}.zip`);
-        })();
+        } finally {
+          sonnerToast.dismiss(loadingId);
+        }
       }
 
       const itemCount = rowsFmt.length;
@@ -476,7 +609,7 @@ export default function AuditoriaFiscalPage() {
           : `Exportado: ${zipBaseName}.zip (Relatório, Gráficos, Notas) — ${exportSource.length} nota(s), ${itemCount} item(ns).`
       );
     },
-    [client, exportFields, monthOptions, selectedMonth, selectedYear]
+    [client, exportFields, monthOptions, selectedMonth, selectedYear, fetchStats]
   );
 
   const openAuditoriaExport = useCallback((format: "csv" | "xlsx" | "pdf", records: NfeRecord[] | null) => {
@@ -489,11 +622,33 @@ export default function AuditoriaFiscalPage() {
     setRelatorioModalOpen(true);
   }, [displayNotes]);
 
+  const handleTableExport = useCallback(
+    async (format: "csv" | "xlsx" | "pdf") => {
+      try {
+        const all = await fetchAllNotesForTableQuery();
+        if (all.length === 0) {
+          toast.error("Nada para exportar com o filtro atual (o GET já aplica busca, período e venda/compra).");
+          return;
+        }
+        openAuditoriaExport(format, all);
+      } catch (e) {
+        console.error(e);
+        toast.error("Não foi possível carregar as notas para exportar.");
+      }
+    },
+    [fetchAllNotesForTableQuery, openAuditoriaExport]
+  );
+
   const handleRelatorioConfirm = useCallback(
-    (data: RelatorioAuditoriaFormData) => {
+    async (data: RelatorioAuditoriaFormData) => {
       if (!pendingExport) return;
       const source = pendingExport.records ?? displayNotes;
-      performAuditoriaExport(data, pendingExport.format, source, pendingExport.records !== null);
+      try {
+        await performAuditoriaExport(data, pendingExport.format, source, pendingExport.records !== null);
+      } catch (e) {
+        console.error(e);
+        toast.error("Erro ao exportar. Tente novamente.");
+      }
     },
     [pendingExport, displayNotes, performAuditoriaExport]
   );
@@ -508,10 +663,11 @@ export default function AuditoriaFiscalPage() {
       variant: "destructive",
     });
     if (!confirmed) return;
-    setDeleteMonthLoading(true);
+    setDeleteLoading("month");
     try {
       const count = await deleteByMonth(selectedMonth);
       await fetchNotes();
+      await fetchTableNotes();
       await fetchAlerts();
       await fetchStats();
       toast.success(count > 0 ? `${count} nota(s) excluída(s). Faça o upload dos XMLs novamente.` : "Nenhuma nota encontrada para este mês.");
@@ -519,26 +675,117 @@ export default function AuditoriaFiscalPage() {
       toast.error("Erro ao excluir notas.");
       console.error(e);
     } finally {
-      setDeleteMonthLoading(false);
+      setDeleteLoading(null);
     }
-  }, [selectedMonth, monthOptions, confirm, deleteByMonth, fetchNotes, fetchAlerts, fetchStats]);
+  }, [selectedMonth, monthOptions, confirm, deleteByMonth, fetchNotes, fetchTableNotes, fetchAlerts, fetchStats]);
 
+  const handleDeleteYear = useCallback(async () => {
+    if (!selectedYear) return;
+    const confirmed = await confirm({
+      title: "Excluir notas do ano",
+      description: `Excluir todas as notas de ${selectedYear}? Você poderá fazer o upload dos XMLs novamente. Esta ação não pode ser desfeita.`,
+      confirmLabel: "Excluir",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    setDeleteLoading("year");
+    try {
+      const count = await deleteByYear(selectedYear);
+      await fetchNotes();
+      await fetchTableNotes();
+      await fetchAlerts();
+      await fetchStats();
+      toast.success(
+        count > 0 ? `${count} nota(s) do ano ${selectedYear} excluída(s).` : `Nenhuma nota encontrada para ${selectedYear}.`
+      );
+    } catch (e) {
+      toast.error("Erro ao excluir notas do ano.");
+      console.error(e);
+    } finally {
+      setDeleteLoading(null);
+    }
+  }, [selectedYear, confirm, deleteByYear, fetchNotes, fetchTableNotes, fetchAlerts, fetchStats]);
+
+  const handleDeleteAll = useCallback(async () => {
+    if (notes.length === 0) return;
+    const confirmed = await confirm({
+      title: "Excluir todas as notas",
+      description: `Remover todas as ${notes.length} nota(s) deste cliente (alertas e prestação serão apagados). Você poderá importar os XMLs novamente. Esta ação não pode ser desfeita.`,
+      confirmLabel: "Excluir todas",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    setDeleteLoading("all");
+    try {
+      const count = await deleteAllNotes();
+      await fetchNotes();
+      await fetchTableNotes();
+      await fetchAlerts();
+      await fetchStats();
+      toast.success(count > 0 ? `${count} nota(s) excluída(s).` : "Nenhuma nota para excluir.");
+    } catch (e) {
+      toast.error("Erro ao excluir notas.");
+      console.error(e);
+    } finally {
+      setDeleteLoading(null);
+    }
+  }, [notes.length, confirm, deleteAllNotes, fetchNotes, fetchTableNotes, fetchAlerts, fetchStats]);
+
+  /**
+   * Carga inicial por cliente:
+   * - GET /fiscal-alerts → score, cards, `loading` (skeleton da página até terminar).
+   * - GET /notes (sem page) em background → `notes` para filtros ano/mês; não bloqueia o layout.
+   * - GET /notes?...&page=&perPage= → tabela (efeito abaixo); usa `tableLoading` só na tabela.
+   */
   useEffect(() => {
     if (!clientId) return;
     setLoading(true);
-    Promise.all([fetchNotes(), fetchAlerts()]).finally(() => setLoading(false));
+    Promise.all([fetchAlerts()]).finally(() => setLoading(false));
+    void fetchNotes();
   }, [clientId, fetchNotes, fetchAlerts]);
 
   useEffect(() => {
     if (!clientId) return;
-    fetchStats();
-  }, [clientId, selectedYear, selectedMonth, fetchStats]);
+    fetchTableNotes();
+  }, [clientId, selectedYear, selectedMonth, tableSearchQuery, fetchTableNotes]);
 
-  const alertsForDisplay = useMemo(() => {
-    const source = selectedMonth ? monthFilteredNotes : yearFilteredNotes;
-    const chaves = new Set(source.map((r) => r.chave));
+  useEffect(() => {
+    if (!clientId) {
+      setConfazStRows([]);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetch("/api/tax/confaz-st", {
+          headers: getAuthHeaders(),
+          credentials: "include",
+        });
+        if (!res.ok) {
+          setConfazStRows([]);
+          return;
+        }
+        const data = (await res.json()) as { items?: ConfazStApiItem[] };
+        if (Array.isArray(data.items)) {
+          setConfazStRows(confazRowsFromApi(data.items));
+        } else {
+          setConfazStRows([]);
+        }
+      } catch {
+        setConfazStRows([]);
+      }
+    })();
+  }, [clientId]);
+
+  useEffect(() => {
+    if (!clientId) return;
+    // Painel "Gráficos" usa forceMount: precisa de stats no DOM mesmo fora da aba (export captura o ref).
+    fetchStats();
+  }, [clientId, selectedYear, selectedMonth, statsOperacao, fetchStats]);
+
+  const alertsForTableDisplay = useMemo(() => {
+    const chaves = new Set(tableDisplayNotes.map((r) => r.chave));
     return alerts.filter((a) => chaves.has(a.chave));
-  }, [alerts, selectedMonth, monthFilteredNotes, yearFilteredNotes]);
+  }, [alerts, tableDisplayNotes]);
 
   const filteredAlerts =
     nivelFilter === "all"
@@ -736,24 +983,33 @@ export default function AuditoriaFiscalPage() {
             </Card>
           </div>
 
-          <Tabs defaultValue="resumo" className="mb-6">
-            <TabsList className="mb-4">
-              <TabsTrigger value="resumo">Resumo e análise</TabsTrigger>
-              <TabsTrigger value="itens">Análise por itens</TabsTrigger>
-              <TabsTrigger value="inconsistencias">Inconsistências</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="resumo" className="space-y-6">
-              {yearOptions.length > 0 && (
-                <div className="flex flex-wrap items-center gap-4">
+          <div className="mb-4 flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            {yearOptions.length > 0 && (
+              <>
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-slate-500">Ano</Label>
+                  <Select value={selectedYear || yearOptions[0]?.value} onValueChange={setSelectedYear}>
+                    <SelectTrigger className="w-[120px]">
+                      <SelectValue placeholder="Selecione o ano" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {yearOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {monthOptions.length > 0 && (
                   <div className="flex items-center gap-2">
-                    <Label className="text-xs text-slate-500">Ano</Label>
-                    <Select value={selectedYear || yearOptions[0]?.value} onValueChange={setSelectedYear}>
-                      <SelectTrigger className="w-[120px]">
-                        <SelectValue placeholder="Selecione o ano" />
+                    <Label className="text-xs text-slate-500">Mês</Label>
+                    <Select value={selectedMonth || monthOptions[0]?.value} onValueChange={setSelectedMonth}>
+                      <SelectTrigger className="w-[180px]">
+                        <SelectValue placeholder="Selecione o mês" />
                       </SelectTrigger>
                       <SelectContent>
-                        {yearOptions.map((opt) => (
+                        {monthOptions.map((opt) => (
                           <SelectItem key={opt.value} value={opt.value}>
                             {opt.label}
                           </SelectItem>
@@ -761,26 +1017,79 @@ export default function AuditoriaFiscalPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  {monthOptions.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <Label className="text-xs text-slate-500">Mês (tabela e exclusão)</Label>
-                      <Select value={selectedMonth || monthOptions[0]?.value} onValueChange={setSelectedMonth}>
-                        <SelectTrigger className="w-[180px]">
-                          <SelectValue placeholder="Selecione o mês" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {monthOptions.map((opt) => (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-                </div>
-              )}
-              {stats && (
+                )}
+              </>
+            )}
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-slate-500">Operação</Label>
+              <Select
+                value={statsOperacao}
+                onValueChange={(v) => setStatsOperacao(v as "todos" | "venda" | "compra")}
+              >
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="todos">Todas</SelectItem>
+                  <SelectItem value="venda">Venda</SelectItem>
+                  <SelectItem value="compra">Compra</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="w-full text-[11px] text-slate-500 sm:w-auto sm:flex-1 sm:pl-2">
+              Mesmo filtro para gráficos/resumo e tabela (abas separadas para desempenho).
+            </p>
+          </div>
+
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "tabela" | "graficos" | "inconsistencias")} className="mb-6">
+            <TabsList className="mb-4">
+              <TabsTrigger value="tabela">Tabela de notas</TabsTrigger>
+              <TabsTrigger value="graficos">Gráficos e resumo</TabsTrigger>
+              <TabsTrigger value="inconsistencias">Inconsistências</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="tabela" className="space-y-6">
+              {activeTab === "tabela" ? (
+                <AuditoriaItemsTable
+                  records={tableDisplayNotes}
+                  alerts={alertsForTableDisplay}
+                  searchQuery={tableSearchQuery}
+                  onSearchQueryChange={setTableSearchQuery}
+                  loading={tableLoading}
+                  onDeleteMonth={handleDeleteMonth}
+                  onDeleteYear={handleDeleteYear}
+                  onDeleteAll={handleDeleteAll}
+                  deleteLoading={deleteLoading}
+                  deleteMonthDisabled={!selectedMonth || monthFilteredNotes.length === 0}
+                  deleteYearDisabled={!selectedYear || yearFilteredNotes.length === 0}
+                  deleteAllDisabled={notes.length === 0}
+                  itemCountForQuery={tableListMeta?.total ?? 0}
+                  onExportFiltered={handleTableExport}
+                  pagination={
+                    tableListMeta
+                      ? {
+                          page: tableListMeta.page,
+                          totalPages: tableListMeta.totalPages,
+                          total: tableListMeta.total,
+                          perPage: tableListMeta.perPage,
+                          onPageChange: (p) => setTablePage(p),
+                        }
+                      : undefined
+                  }
+                  clientCnpj={client?.cnpj}
+                  confazStRows={confazStRows}
+                />
+              ) : null}
+            </TabsContent>
+
+            <TabsContent
+              value="graficos"
+              forceMount
+              className="data-[state=active]:relative data-[state=active]:z-auto data-[state=active]:w-full data-[state=inactive]:pointer-events-none data-[state=inactive]:fixed data-[state=inactive]:-left-[200vw] data-[state=inactive]:top-0 data-[state=inactive]:z-0 data-[state=inactive]:w-[min(100vw,80rem)] data-[state=inactive]:max-w-full space-y-6 outline-none"
+            >
+              {activeTab !== "graficos" ? null : statsLoading ? (
+                <ResumoAnalysisSkeleton />
+              ) : stats ? (
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
@@ -789,7 +1098,11 @@ export default function AuditoriaFiscalPage() {
                     </CardTitle>
                     <p className="text-sm text-slate-500">
                       {stats.notesCount > 0
-                        ? `Dados extraídos de ${stats.notesCount} nota(s) (${stats.vendaCount ?? stats.notesCount} venda, ${stats.compraCount ?? 0} compra) e ${stats.itemsCount} item(ns)`
+                        ? `Dados extraídos de ${stats.notesCount} nota(s) (${stats.vendaCount ?? 0} venda, ${stats.compraCount ?? 0} compra) e ${stats.itemsCount} item(ns)${
+                            stats.operacao && stats.operacao !== "todos"
+                              ? ` — filtro: ${stats.operacao === "venda" ? "apenas venda" : "apenas compra"}`
+                              : ""
+                          }`
                         : "Nenhuma nota importada. Importe XMLs em Documentos fiscais para iniciar a análise."}
                     </p>
                   </CardHeader>
@@ -846,71 +1159,32 @@ export default function AuditoriaFiscalPage() {
                     ) : null}
                   </CardContent>
                 </Card>
-              )}
+              ) : null}
               <div ref={chartsContainerRef}>
-                <AuditoriaCharts stats={stats ? { totalICMS: stats.totalICMS, totalPIS: stats.totalPIS, totalCOFINS: stats.totalCOFINS, itemsCount: stats.itemsCount, totalItemsValue: stats.totalItemsValue ?? 0, topCfops: stats.topCfops ?? [], topNcms: stats.topNcms ?? [], icmsByMonth: stats.icmsByMonth ?? [], itemsByMonth: stats.itemsByMonth ?? [] } : null} />
+                <AuditoriaCharts
+                  loading={statsLoading}
+                  operacaoFilter={statsOperacao}
+                  stats={
+                    stats
+                      ? {
+                          totalICMS: stats.totalICMS,
+                          totalPIS: stats.totalPIS,
+                          totalCOFINS: stats.totalCOFINS,
+                          itemsCount: stats.itemsCount,
+                          totalItemsValue: stats.totalItemsValue ?? 0,
+                          topCfops: stats.topCfops ?? [],
+                          topNcms: stats.topNcms ?? [],
+                          icmsByMonth: stats.icmsByMonth ?? [],
+                          itemsByMonth: stats.itemsByMonth ?? [],
+                        }
+                      : null
+                  }
+                />
               </div>
-              <AuditoriaItemsTable
-                records={displayNotes}
-                alerts={alertsForDisplay}
-                onDeleteMonth={selectedMonth ? handleDeleteMonth : undefined}
-                deleteMonthLoading={deleteMonthLoading}
-                deleteMonthDisabled={!selectedMonth || monthFilteredNotes.length === 0}
-                onExportFiltered={(recs, fmt) => openAuditoriaExport(fmt, recs)}
-                clientCnpj={client?.cnpj}
-              />
-            </TabsContent>
-
-            <TabsContent value="itens" className="space-y-6">
-              {yearOptions.length > 0 && (
-                <div className="flex flex-wrap items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <Label className="text-xs text-slate-500">Ano</Label>
-                    <Select value={selectedYear || yearOptions[0]?.value} onValueChange={setSelectedYear}>
-                      <SelectTrigger className="w-[120px]">
-                        <SelectValue placeholder="Selecione o ano" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {yearOptions.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {monthOptions.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <Label className="text-xs text-slate-500">Mês</Label>
-                      <Select value={selectedMonth || monthOptions[0]?.value} onValueChange={setSelectedMonth}>
-                        <SelectTrigger className="w-[180px]">
-                          <SelectValue placeholder="Selecione o mês" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {monthOptions.map((opt) => (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-                </div>
-              )}
-              <AuditoriaItemsTable
-                records={displayNotes}
-                alerts={alertsForDisplay}
-                onDeleteMonth={selectedMonth ? handleDeleteMonth : undefined}
-                deleteMonthLoading={deleteMonthLoading}
-                deleteMonthDisabled={!selectedMonth || monthFilteredNotes.length === 0}
-                onExportFiltered={(recs, fmt) => openAuditoriaExport(fmt, recs)}
-                clientCnpj={client?.cnpj}
-              />
             </TabsContent>
 
             <TabsContent value="inconsistencias">
-              <Card className="border-slate-200 shadow-sm">
+              {activeTab !== "inconsistencias" ? null : <Card className="border-slate-200 shadow-sm">
             <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <CardTitle>Inconsistências detectadas</CardTitle>
               <div className="flex flex-wrap gap-2">
@@ -1015,7 +1289,7 @@ export default function AuditoriaFiscalPage() {
                 </div>
               )}
             </CardContent>
-          </Card>
+          </Card>}
             </TabsContent>
           </Tabs>
           </>

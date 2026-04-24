@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { BarChart3, PieChart as PieChartIcon, LineChart } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { PieChart, Pie, Cell, Tooltip as PieTooltip } from "recharts";
 import {
@@ -10,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatCurrency } from "@/lib/nfe";
+import { ChartsSkeleton } from "@/components/auditoria/auditoria-skeletons";
 
 const CFOP_DESCRICOES: Record<string, string> = {
   "5101": "Venda de produção do estabelecimento (Intraestadual)",
@@ -46,11 +48,59 @@ type Stats = {
 const CFOP_COLORS = ["#0ea5e9", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#6366f1", "#f97316", "#14b8a6"];
 const MONTH_NAMES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
+type OperacaoFilter = "todos" | "venda" | "compra";
+
+function hintForOperacao(op: OperacaoFilter): string | undefined {
+  if (op === "venda") return "Não há notas de venda neste período com o filtro selecionado.";
+  if (op === "compra") return "Não há notas de compra neste período com o filtro selecionado.";
+  return undefined;
+}
+
+function ChartEmptyPanel({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: typeof BarChart3;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex min-h-[140px] flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-slate-200 bg-linear-to-b from-slate-50/90 to-white px-4 py-8 text-center">
+      <div className="flex size-11 items-center justify-center rounded-full bg-slate-100 ring-1 ring-slate-200/80">
+        <Icon className="size-5 text-slate-500" strokeWidth={1.75} />
+      </div>
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-slate-800">{title}</p>
+        {description ? <p className="max-w-[220px] text-xs leading-relaxed text-slate-500">{description}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function ChartsLoadErrorEmpty() {
+  return (
+    <div className="col-span-full flex min-h-[280px] flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 px-6 py-12 text-center">
+      <div className="flex size-14 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-slate-200">
+        <LineChart className="size-7 text-slate-400" strokeWidth={1.5} />
+      </div>
+      <div className="max-w-md space-y-2">
+        <p className="text-base font-semibold text-slate-800">Indicadores indisponíveis</p>
+        <p className="text-sm text-slate-600">
+          Não foi possível carregar os dados dos gráficos. Verifique a conexão e tente atualizar a página ou alterar o período.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 type Props = {
   stats: Stats | null;
+  loading?: boolean;
+  operacaoFilter?: OperacaoFilter;
 };
 
-export default function AuditoriaCharts({ stats }: Props) {
+export default function AuditoriaCharts({ stats, loading = false, operacaoFilter = "todos" }: Props) {
   const icmsChartData = useMemo(() => {
     if (!stats?.icmsByMonth?.length) return [];
     return stats.icmsByMonth.map(({ mes, valor }) => {
@@ -86,15 +136,28 @@ export default function AuditoriaCharts({ stats }: Props) {
 
   const topNcmData = useMemo(() => stats?.topNcms?.slice(0, 10) ?? [], [stats?.topNcms]);
 
-  if (!stats) return null;
+  const opHint = hintForOperacao(operacaoFilter);
+
+  if (loading) {
+    return <ChartsSkeleton />;
+  }
+
+  if (!stats) {
+    return (
+      <div className="grid w-full grid-cols-1 items-start gap-4">
+        <ChartsLoadErrorEmpty />
+      </div>
+    );
+  }
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="mx-auto grid w-full max-w-3xl grid-cols-1 items-start gap-4">
+      {/* Coluna única: evita células da grelha esticarem à altura da linha (3 colunas) e deixa o PDF/legível */}
       {/* ICMS por mês */}
-      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div data-auditoria-export-card className="flex w-full flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="mb-3 text-base font-semibold text-slate-900">ICMS por mês</h3>
         {icmsChartData.length > 0 ? (
-          <div className="h-[140px] min-h-0">
+          <div className="h-[200px] min-h-0 w-full sm:h-[220px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={icmsChartData} margin={{ top: 16, right: 16, left: 4, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -109,7 +172,11 @@ export default function AuditoriaCharts({ stats }: Props) {
             </ResponsiveContainer>
           </div>
         ) : (
-          <p className="py-8 text-center text-sm text-slate-500">Sem dados de ICMS por mês</p>
+          <ChartEmptyPanel
+            icon={BarChart3}
+            title="Sem dados de ICMS por mês"
+            description={opHint ?? "Não há valores de ICMS agregados por mês para o período selecionado."}
+          />
         )}
         {icmsChartData.length > 0 && (
           <div className="mt-3 border-t border-slate-100 pt-3">
@@ -122,10 +189,10 @@ export default function AuditoriaCharts({ stats }: Props) {
       </div>
 
       {/* Produtos por mês */}
-      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div data-auditoria-export-card className="flex w-full flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="mb-3 text-base font-semibold text-slate-900">Produtos por mês</h3>
         {itemsChartData.length > 0 ? (
-          <div className="h-[140px] min-h-0">
+          <div className="h-[200px] min-h-0 w-full sm:h-[220px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={itemsChartData} margin={{ top: 16, right: 16, left: 4, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -140,7 +207,11 @@ export default function AuditoriaCharts({ stats }: Props) {
             </ResponsiveContainer>
           </div>
         ) : (
-          <p className="py-8 text-center text-sm text-slate-500">Sem dados de produtos por mês</p>
+          <ChartEmptyPanel
+            icon={BarChart3}
+            title="Sem dados de produtos por mês"
+            description={opHint ?? "Não há valor de produtos agregado por mês para exibir no gráfico."}
+          />
         )}
         {itemsChartData.length > 0 && (
           <div className="mt-3 border-t border-slate-100 pt-3">
@@ -153,10 +224,10 @@ export default function AuditoriaCharts({ stats }: Props) {
       </div>
 
       {/* Distribuição de CFOP */}
-      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div data-auditoria-export-card className="flex w-full flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="mb-3 text-base font-semibold text-slate-900">Distribuição de CFOP</h3>
         {cfopChartData.length > 0 ? (
-          <div className="h-[140px] min-h-0 cursor-pointer overflow-visible">
+          <div className="h-[200px] min-h-0 w-full cursor-pointer overflow-visible sm:h-[220px]">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
                 <Pie
@@ -188,7 +259,11 @@ export default function AuditoriaCharts({ stats }: Props) {
             </ResponsiveContainer>
           </div>
         ) : (
-          <p className="py-8 text-center text-sm text-slate-500">Sem dados de CFOP</p>
+          <ChartEmptyPanel
+            icon={PieChartIcon}
+            title="Sem dados de CFOP"
+            description={opHint ?? "Nenhum CFOP foi encontrado nos itens do período para montar a distribuição."}
+          />
         )}
         {cfopChartData.length > 0 && (
           <>
@@ -227,9 +302,9 @@ export default function AuditoriaCharts({ stats }: Props) {
       </div>
 
       {/* Tributos totais */}
-      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div data-auditoria-export-card className="flex w-full flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="mb-3 text-base font-semibold text-slate-900">Tributos totais</h3>
-        <div className="flex-1 space-y-2">
+        <div className="space-y-2">
           <div className="flex justify-between text-sm">
             <span className="text-slate-600">ICMS</span>
             <span className="font-semibold tabular-nums text-slate-900">{formatCurrency(stats.totalICMS)}</span>
@@ -265,12 +340,18 @@ export default function AuditoriaCharts({ stats }: Props) {
       </div>
 
       {/* Participação dos tributos */}
-      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div data-auditoria-export-card className="flex w-full flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="mb-3 text-base font-semibold text-slate-900">Participação dos tributos</h3>
         {(() => {
           const total = stats.totalICMS + stats.totalPIS + stats.totalCOFINS;
           if (total <= 0) {
-            return <p className="flex-1 py-8 text-center text-sm text-slate-500">Sem dados de tributos</p>;
+            return (
+              <ChartEmptyPanel
+                icon={PieChartIcon}
+                title="Sem dados de tributos"
+                description={opHint ?? "ICMS, PIS e COFINS estão zerados ou não foram informados nos itens deste período."}
+              />
+            );
           }
           const icmsPct = (stats.totalICMS / total) * 100;
           const pisPct = (stats.totalPIS / total) * 100;
@@ -281,16 +362,16 @@ export default function AuditoriaCharts({ stats }: Props) {
             { label: "COFINS", valor: stats.totalCOFINS, pct: cofinsPct, fill: "#ec4899" },
           ];
           return (
-            <div className="flex flex-1 flex-col justify-center gap-4">
+            <div className="flex flex-col gap-3">
               {bars.map(({ label, valor, pct, fill }) => (
-                <div key={label} className="space-y-1">
+                <div key={label} className="space-y-1.5">
                   <div className="flex justify-between text-xs">
                     <span className="text-slate-600">{label}</span>
                     <span className="font-medium tabular-nums text-slate-900">
                       {formatCurrency(valor)} ({pct.toFixed(1)}%)
                     </span>
                   </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
                     <div
                       className="h-full rounded-full transition-all"
                       style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: fill }}
@@ -304,10 +385,10 @@ export default function AuditoriaCharts({ stats }: Props) {
       </div>
 
       {/* Top NCM utilizados */}
-      <div className="flex min-h-[240px] flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div data-auditoria-export-card className="flex w-full flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="mb-3 text-base font-semibold text-slate-900">Top NCM utilizados</h3>
         {topNcmData.length > 0 ? (
-          <ul className="flex-1 space-y-2 text-sm">
+          <ul className="space-y-2 text-sm">
             {topNcmData.map(({ ncm, count }) => (
               <li key={ncm} className="flex items-center justify-between font-mono">
                 <span className="text-slate-700">{ncm}</span>
@@ -316,7 +397,11 @@ export default function AuditoriaCharts({ stats }: Props) {
             ))}
           </ul>
         ) : (
-          <p className="flex-1 py-4 text-center text-sm text-slate-500">Sem dados de NCM</p>
+          <ChartEmptyPanel
+            icon={BarChart3}
+            title="Sem dados de NCM"
+            description={opHint ?? "Nenhum NCM foi encontrado nos itens analisados para este período."}
+          />
         )}
       </div>
 

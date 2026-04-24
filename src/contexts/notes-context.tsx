@@ -31,6 +31,7 @@ type NotesContextType = {
   deleteRecord: (chave: string) => Promise<boolean>;
   deleteByMonth: (month: string) => Promise<number>;
   deleteByYear: (year: string) => Promise<number>;
+  deleteAllNotes: () => Promise<number>;
   updateIncluded: (chave: string, value: boolean) => void;
   refetch: () => Promise<void>;
 };
@@ -83,6 +84,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     try {
       let totalSaved = 0;
       let totalDuplicates = 0;
+      let totalRejected = 0;
       const batches: NfeRecord[][] = [];
       for (let i = 0; i < newRecords.length; i += IMPORT_BATCH_SIZE) {
         batches.push(newRecords.slice(i, i + IMPORT_BATCH_SIZE));
@@ -106,6 +108,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
         for (const data of results) {
           totalSaved += data?.saved ?? 0;
           totalDuplicates += data?.duplicateCount ?? 0;
+          totalRejected += data?.rejectedCount ?? 0;
         }
         const sent = Math.min((i + chunk.length) * IMPORT_BATCH_SIZE, newRecords.length);
         setUploadProgress({ sent, total: newRecords.length });
@@ -118,6 +121,11 @@ export function NotesProvider({ children }: { children: ReactNode }) {
       if (totalDuplicates > 0) {
         toast.warning(
           `${totalDuplicates} nota(s) duplicada(s) — já existiam no sistema e não foram importadas novamente.`
+        );
+      }
+      if (totalRejected > 0) {
+        toast.warning(
+          `${totalRejected} nota(s) ignorada(s): o CNPJ/CPF cadastrado da empresa não consta como emitente nem destinatário.`
         );
       }
     } catch (e) {
@@ -210,6 +218,26 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     [selectedClient?.id, fetchNotes]
   );
 
+  const deleteAllNotes = useCallback(async (): Promise<number> => {
+    if (!selectedClient?.id) return 0;
+    try {
+      const res = await fetch(`/api/clients/${selectedClient.id}/notes?all=1`, {
+        method: "DELETE",
+        headers: getAuthHeaders(),
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const count = data.deleted ?? 0;
+        await fetchNotes();
+        return count;
+      }
+    } catch (e) {
+      console.error("Erro ao excluir todas as notas:", e);
+    }
+    return 0;
+  }, [selectedClient?.id, fetchNotes]);
+
   const syncPrestacao = useCallback((map: Record<string, boolean>) => {
     if (!selectedClient?.id) return;
     const chaves = Object.keys(map).filter((k) => map[k]);
@@ -250,6 +278,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
         deleteRecord,
         deleteByMonth,
         deleteByYear,
+        deleteAllNotes,
         updateIncluded,
         refetch: fetchNotes,
       }}

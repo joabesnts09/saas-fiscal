@@ -119,8 +119,8 @@ export function getRecordRow(
     cstIPI: Array.from(
       new Set(record.itens.map((i) => (i.cstIpi ?? "").trim()).filter(Boolean)),
     ).join("; "),
-    cbs: "", // CBS ainda não mapeado
-    ibs: "", // IBS ainda não mapeado
+    cbs: record.itens.reduce((a, i) => a + (i.vCBS ?? 0), 0),
+    ibs: record.itens.reduce((a, i) => a + (i.vIBS ?? 0), 0),
   };
 
   const result: Record<string, string | number> = {};
@@ -132,6 +132,15 @@ export function getRecordRow(
   return result;
 }
 
+const currencyLabel = (label: string) =>
+  label === "Valor" ||
+  label.includes("ICMS") ||
+  label.includes("PIS") ||
+  label.includes("COFINS") ||
+  label.includes("cálculo") ||
+  label === "IBS" ||
+  label === "CBS";
+
 export function getRecordRowFormatted(
   record: NfeRecord,
   fieldKeys: ExportFieldKey[]
@@ -139,7 +148,7 @@ export function getRecordRowFormatted(
   const row = getRecordRow(record, fieldKeys);
   const formatted: Record<string, string | number> = {};
   for (const [label, val] of Object.entries(row)) {
-    if (typeof val === "number" && (label === "Valor" || label.includes("ICMS") || label.includes("PIS") || label.includes("COFINS") || label.includes("cálculo"))) {
+    if (typeof val === "number" && currencyLabel(label)) {
       formatted[label] = formatCurrency(val);
     } else {
       formatted[label] = val;
@@ -209,8 +218,8 @@ export function getRecordRowsByItem(
       cstPIS: item?.cstPis?.trim() ?? "—",
       cstCOFINS: item?.cstCofins?.trim() ?? "—",
       cstIPI: item?.cstIpi?.trim() ?? "—",
-      cbs: "—",
-      ibs: "—",
+      cbs: item?.vCBS ?? 0,
+      ibs: item?.vIBS ?? 0,
     };
 
     const result: Record<string, string | number> = {};
@@ -234,7 +243,7 @@ export function getRecordRowsByItemFormatted(
   return rows.map((row) => {
     const formatted: Record<string, string | number> = {};
     for (const [label, val] of Object.entries(row)) {
-      if (typeof val === "number" && (label === "Valor" || label.includes("ICMS") || label.includes("PIS") || label.includes("COFINS") || label.includes("cálculo"))) {
+      if (typeof val === "number" && currencyLabel(label)) {
         formatted[label] = formatCurrency(val);
       } else {
         formatted[label] = val;

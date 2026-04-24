@@ -1,6 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useMemo } from "react";
+import { Library } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -8,8 +10,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency, formatCnpj, formatDate } from "@/lib/nfe";
+import { formatCurrency, formatCnpj, formatDate, formatLocalidadeParticipante } from "@/lib/nfe";
 import type { NfeRecord, NfeItem } from "@/lib/nfe";
+import type { ConfazStRow } from "@/lib/confaz-st-core";
+import { enrichProductFromConfaz, type ConfazProductEnrichment } from "@/lib/confaz-enrichment";
 
 type FiscalAlertRow = {
   chave: string;
@@ -28,6 +32,7 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   clientCnpj?: string | null;
+  confazStRows?: ConfazStRow[];
 };
 
 export default function AuditoriaItemDetailsDialog({
@@ -38,7 +43,23 @@ export default function AuditoriaItemDetailsDialog({
   open,
   onOpenChange,
   clientCnpj,
+  confazStRows = [],
 }: Props) {
+  const confaz: ConfazProductEnrichment = useMemo(() => {
+    if (!record || !item) {
+      return {
+        sujeitoSt: false,
+        fundamentoLegal: null,
+        segmento: null,
+        descricaoOficial: null,
+        cestEsperadosFormatados: [],
+        cestXmlCompativel: null,
+        notaSobreIcms: null,
+      };
+    }
+    return enrichProductFromConfaz(item, record.dataEmissao, confazStRows);
+  }, [record, item, confazStRows]);
+
   if (!record || !item) return null;
 
   const tipoLabel = record.tipo === "compra" ? "Compra" : record.tipo === "venda" ? "Venda" : "Outro";
@@ -110,6 +131,10 @@ export default function AuditoriaItemDetailsDialog({
                       {docLabel(record.emitente.cnpj)}: {formatCnpj(record.emitente.cnpj)}
                     </p>
                   )}
+                  <p className="mt-1 text-xs text-slate-600">
+                    <span className="font-medium text-slate-500">Origem: </span>
+                    {formatLocalidadeParticipante(record.emitente)}
+                  </p>
                 </div>
               </div>
               <div className="sm:col-span-2 space-y-1">
@@ -122,6 +147,10 @@ export default function AuditoriaItemDetailsDialog({
                       {formatCnpj((destCnpj ?? record.destinatario?.cnpj) ?? "")}
                     </p>
                   )}
+                  <p className="mt-1 text-xs text-slate-600">
+                    <span className="font-medium text-slate-500">Destino: </span>
+                    {formatLocalidadeParticipante(record.destinatario ?? undefined)}
+                  </p>
                 </div>
               </div>
             </div>
@@ -151,6 +180,57 @@ export default function AuditoriaItemDetailsDialog({
               <Field label="Valor unitário" value={item.vUnCom != null ? formatCurrency(item.vUnCom) : "—"} />
               <Field label="Valor do item" value={item.vProd != null ? formatCurrency(item.vProd) : "—"} highlight />
             </div>
+
+            <div className="mt-4 rounded-lg border border-teal-200/80 bg-teal-50/40 p-4">
+              <h5 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-teal-900">
+                <Library className="size-4 shrink-0 opacity-80" aria-hidden />
+                Classificação fiscal (CONFAZ — por NCM)
+              </h5>
+              <p className="mb-3 text-xs leading-relaxed text-teal-900/90">
+                O XML não traz fundamento legal nem segmento. Eles aparecem aqui pelo{" "}
+                <strong>cruzamento NCM × data da nota × tabela CONFAZ</strong> (ex.: Convênio ICMS 142/18). O valor de
+                ICMS no XML é <strong>efeito da regra tributária</strong>, não a norma em si.
+              </p>
+              {confaz.sujeitoSt ? (
+                <div className="space-y-3 text-sm">
+                  <div className="flex flex-wrap gap-2">
+                    <Badge className="bg-teal-700 text-white hover:bg-teal-700">Substituição tributária (tabela)</Badge>
+                    {confaz.cestXmlCompativel === false ? (
+                      <Badge variant="outline" className="border-amber-400 bg-amber-50 text-amber-900">
+                        CEST do XML diverge do esperado
+                      </Badge>
+                    ) : confaz.cestXmlCompativel === true ? (
+                      <Badge variant="outline" className="border-emerald-400 bg-emerald-50 text-emerald-800">
+                        CEST compatível com a tabela
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <Field label="Segmento" value={confaz.segmento ?? "—"} />
+                  <Field label="Descrição oficial (tabela)" value={confaz.descricaoOficial ?? "—"} />
+                  <Field
+                    label="Fundamento legal"
+                    value={confaz.fundamentoLegal ?? "—"}
+                    highlight
+                  />
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-xs font-medium text-slate-500">CEST esperado (tabela)</span>
+                    <span className="font-mono text-sm text-slate-900">
+                      {confaz.cestEsperadosFormatados.length > 0
+                        ? confaz.cestEsperadosFormatados.join(" · ")
+                        : "—"}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-600">{confaz.notaSobreIcms}</p>
+              )}
+              {confaz.sujeitoSt && confaz.notaSobreIcms ? (
+                <p className="mt-3 rounded-md border border-teal-200/60 bg-white/80 px-3 py-2 text-xs leading-relaxed text-slate-700">
+                  {confaz.notaSobreIcms}
+                </p>
+              ) : null}
+            </div>
+
             {/* Tributos em destaque */}
             <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
               <span className="mb-3 block text-xs font-medium text-slate-500">Impostos e contribuições</span>
@@ -170,6 +250,14 @@ export default function AuditoriaItemDetailsDialog({
                 <div>
                   <span className="text-xs text-slate-500">COFINS</span>
                   <p className="font-mono text-sm font-medium text-slate-900">{formatCurrency(item.vCOFINS ?? 0)}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-slate-500">IBS (reforma — XML)</span>
+                  <p className="font-mono text-sm font-medium text-slate-900">{formatCurrency(item.vIBS ?? 0)}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-slate-500">CBS (reforma — XML)</span>
+                  <p className="font-mono text-sm font-medium text-slate-900">{formatCurrency(item.vCBS ?? 0)}</p>
                 </div>
               </div>
             </div>

@@ -84,6 +84,39 @@ model ExportConfig {
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 }
 
+/// Registro de regras do motor fiscal (CONFAZ, SINIEF, COTEPE, etc.) — peso, severidade e rastreabilidade legal
+model TaxRule {
+  id              String   @id @default(uuid())
+  code            String   @unique // ex: CONF_142_CEST_REQUIRED
+  name            String
+  description     String?
+  category        String // ST | NFE | ICMS | MVA | PROTOCOLO
+  legalSource     String? // ex: "Convênio ICMS 142/18", "Ajuste SINIEF X/Y"
+  defaultSeverity String // error | warning | info
+  weight          Int // impacto no score (pontos a subtrair, ex: 15)
+  active          Boolean  @default(true)
+  priority        Int      @default(0)
+  validatorKey    String? // futuro: nome do validador plugável
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+/// Itens da tabela de ST/CEST (base Convênio ICMS 142/18 e atualizações) — expandir via seed/importação
+model ConfazStItem {
+  id           String    @id @default(uuid())
+  ncmPattern   String // NCM ou prefixo (4 a 8 dígitos), sem máscara
+  cest         String // 7 dígitos (comparar normalizado)
+  descricao    String?
+  segmento     String?
+  vigenteDesde DateTime
+  vigenteAte   DateTime?
+  legalSource  String    @default("Convênio ICMS 142/18")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([ncmPattern])
+}
+
 model FiscalAlert {
   id        String   @id @default(uuid())
   clientId  String
@@ -95,12 +128,15 @@ model FiscalAlert {
   descricao String
   nivel     String   // info, warning, error
   detalhes  String?  // JSON
+  ruleCode  String?  // código em TaxRule.code (motor plugável)
+  legalSource String? // referência normativa exibida no relatório
   createdAt DateTime @default(now())
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@index([clientId, chave])
+  @@index([ruleCode])
 }
 
 model NfeRecord {

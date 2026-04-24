@@ -30,6 +30,17 @@ export type NfeItem = {
   vCOFINS?: number;
   // IPI
   cstIpi?: string;
+  /** Reforma tributária — grupo IBSCBS no XML (vIBS / totais no item) */
+  vIBS?: number;
+  /** Reforma tributária — grupo IBSCBS no XML (vCBS) */
+  vCBS?: number;
+};
+
+/** UF, município e código IBGE quando presentes no endereço da NF-e */
+export type NfeLocalidade = {
+  uf?: string;
+  municipio?: string;
+  cMun?: string;
 };
 
 export type NotaTipo = "venda" | "compra" | "outro";
@@ -47,12 +58,12 @@ export type NfeRecord = {
     cnpj: string;
     razaoSocial: string;
     endereco?: string;
-  };
+  } & NfeLocalidade;
   destinatario?: {
     cnpj: string;
     razaoSocial: string;
     endereco?: string;
-  };
+  } & NfeLocalidade;
   itens: NfeItem[];
 };
 
@@ -72,6 +83,63 @@ const parseNumber = (value: unknown): number => {
   if (typeof value === "string") return Number.parseFloat(value.replace(",", "."));
   return 0;
 };
+
+/** CNPJ/CPF só dígitos — para cruzar emitente/destinatário com o cadastro da empresa */
+export const onlyDigitsDoc = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "");
+
+/**
+ * A nota deve envolver o documento da empresa (emitente ou destinatário).
+ * Sem CPF/CNPJ no cadastro (menos de 11 dígitos), não bloqueia importação.
+ */
+export function recordEnvolveClienteCnpj(record: NfeRecord, clientDoc: string | null | undefined): boolean {
+  const cc = onlyDigitsDoc(clientDoc);
+  if (cc.length < 11) return true;
+  const ec = onlyDigitsDoc(record.emitente?.cnpj);
+  const dc = onlyDigitsDoc(record.destinatario?.cnpj);
+  return ec === cc || dc === cc;
+}
+
+/** Exibição: UF e município (CONFAZ / fiscal — origem e destino da operação) */
+export function formatLocalidadeParticipante(part?: NfeLocalidade | null): string {
+  const u = part?.uf?.trim();
+  const m = part?.municipio?.trim();
+  if (u && m) return `${u} — ${m}`;
+  if (u) return u;
+  if (m) return m;
+  return "—";
+}
+
+function localidadeFromEnder(ender: Record<string, unknown>): NfeLocalidade {
+  const uf = String(ender.UF ?? ender.uf ?? "").trim();
+  const municipio = String(ender.xMun ?? ender.xmun ?? "").trim();
+  const cMun = String(ender.cMun ?? ender.cmun ?? "").trim();
+  const out: NfeLocalidade = {};
+  if (uf) out.uf = uf;
+  if (municipio) out.municipio = municipio;
+  if (cMun) out.cMun = cMun;
+  return out;
+}
+
+/** Soma valores em nós cujo nome é vIBS ou vCBS (NF-e reforma — grupo IBSCBS no item) */
+function sumDeepIbsCbs(imposto: unknown, keyLower: "vibs" | "vcbs"): number {
+  let sum = 0;
+  const walk = (node: unknown) => {
+    if (node == null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const x of node) walk(x);
+      return;
+    }
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (k.toLowerCase() === keyLower) {
+        sum += parseNumber(v);
+      } else {
+        walk(v);
+      }
+    }
+  };
+  walk(imposto);
+  return sum;
+}
 
 /** Verifica se um objeto parece ser o bloco dest da NFe (tem CNPJ/CPF/xNome). */
 function looksLikeDest(obj: unknown): obj is Record<string, unknown> {
@@ -183,6 +251,9 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
       ipiKeys.find((k) => k.toLowerCase().startsWith("ipi"));
     const ipiTrib = ipiTribKey ? ipiGroup[ipiTribKey] ?? {} : {};
 
+    const vIBS = sumDeepIbsCbs(imposto, "vibs");
+    const vCBS = sumDeepIbsCbs(imposto, "vcbs");
+
     const cfopRaw = prod.CFOP ?? prod.cfop;
     const cfop = Array.isArray(cfopRaw) ? cfopRaw[0] : cfopRaw;
 
@@ -211,6 +282,8 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
       pCOFINS: parseNumber(cofins?.pCOFINS ?? cofins?.pCofins ?? cofins?.PCOFINS ?? 0),
       vCOFINS: parseNumber(cofins?.vCOFINS ?? cofins?.vCofins ?? cofins?.VCOFINS ?? 0),
       cstIpi: String(ipiTrib?.CST ?? ipiTrib?.cst ?? "").trim() || undefined,
+      vIBS,
+      vCBS,
     };
   });
 
@@ -253,6 +326,9 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
   const destDoc = pick(dest, "CNPJ", "cnpj", "CPF", "cpf", "idEstrangeiro").trim();
   const destNome = pick(dest, "xNome", "xnome", "nome", "xLgr").trim();
 
+  const locEmit = localidadeFromEnder(ender as Record<string, unknown>);
+  const locDest = localidadeFromEnder(enderDest as Record<string, unknown>);
+
   return {
     chave: String(rawId).replace(/^NFe/, "") || String(prot?.chNFe ?? ""),
     numero: String(ide?.nNF ?? ""),
@@ -264,12 +340,14 @@ export const parseNfeXml = (xml: string): NfeRecord | null => {
       cnpj: pick(emit as Record<string, unknown>, "CNPJ", "cnpj") || String(emit?.CNPJ ?? ""),
       razaoSocial: pick(emit as Record<string, unknown>, "xNome", "xnome") || String(emit?.xNome ?? ""),
       endereco,
+      ...locEmit,
     },
     destinatario: destDoc || destNome
       ? {
           cnpj: destDoc || "—",
           razaoSocial: destNome || "Consumidor não identificado",
           endereco: enderecoDest || undefined,
+          ...locDest,
         }
       : undefined,
     itens,

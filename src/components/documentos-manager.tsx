@@ -12,7 +12,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { formatCnpj, formatCurrency, formatDate, getMonthLabel, parseNfeXml, summarizeItems, type NfeRecord } from "@/lib/nfe";
+import {
+  formatCnpj,
+  formatCurrency,
+  formatDate,
+  getMonthLabel,
+  parseNfeXml,
+  recordEnvolveClienteCnpj,
+  summarizeItems,
+  type NfeRecord,
+} from "@/lib/nfe";
 import {
   DEFAULT_EXPORT_FIELDS,
   getRecordRow,
@@ -72,7 +81,17 @@ export default function DocumentosManager() {
   const [exportConfigModalOpen, setExportConfigModalOpen] = useState(false);
   const [exportFields, setExportFields] = useState<ExportFieldKey[]>(() => [...DEFAULT_EXPORT_FIELDS]);
   const { confirm } = useConfirm();
-  const { records, includedMap, loading: notesLoading, uploadProgress, addRecords, setIncludedMap, updateRecord, deleteRecord, deleteByMonth } = useNotes();
+  const {
+    records,
+    includedMap,
+    loading: notesLoading,
+    uploadProgress,
+    addRecords,
+    setIncludedMap,
+    updateRecord,
+    deleteRecord,
+    deleteByMonth,
+  } = useNotes();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "Autorizada" | "Cancelada">("all");
   const [companyFilter, setCompanyFilter] = useState("all");
@@ -229,7 +248,16 @@ export default function DocumentosManager() {
           }
         }
       }
-      await addRecords(parsed);
+      const accepted = parsed.filter((r) => recordEnvolveClienteCnpj(r, selectedClient?.cnpj));
+      const skipped = parsed.length - accepted.length;
+      if (skipped > 0) {
+        toast.warning(
+          `${skipped} nota(s) ignorada(s): o CNPJ/CPF da empresa cadastrado não consta como emitente nem destinatário.`
+        );
+      }
+      if (accepted.length > 0) {
+        await addRecords(accepted);
+      }
     } finally {
       setUploading(false);
     }

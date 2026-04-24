@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth-api";
 import { analyzeFiscal } from "@/lib/fiscal-engine";
+import { loadTaxRuleContext, invalidateTaxRuleContextCache } from "@/lib/tax-rule-context";
 import type { NfeRecord } from "@/lib/nfe";
 
 async function verifyClientAccess(clientId: string, accountId: string) {
@@ -42,12 +43,26 @@ export async function POST(
       orderBy: { dataEmissao: "desc" },
     });
     const records = notes.map(toNfeRecord);
+    invalidateTaxRuleContextCache();
+    const taxCtx = await loadTaxRuleContext(prisma);
 
-    const allAlerts: { clientId: string; chave: string; itemIndex: number | null; productId: string | null; tipo: string; notaTipo: string | null; descricao: string; nivel: string; detalhes: string | null }[] = [];
+    const allAlerts: {
+      clientId: string;
+      chave: string;
+      itemIndex: number | null;
+      productId: string | null;
+      tipo: string;
+      notaTipo: string | null;
+      descricao: string;
+      nivel: string;
+      detalhes: string | null;
+      ruleCode: string | null;
+      legalSource: string | null;
+    }[] = [];
     for (let i = 0; i < notes.length; i++) {
       const r = records[i]!;
       const notaTipo = notes[i]!.tipo ?? "venda";
-      const alerts = analyzeFiscal(r, { cnpj: client.cnpj });
+      const alerts = analyzeFiscal(r, { cnpj: client.cnpj }, taxCtx);
       for (const a of alerts) {
         allAlerts.push({
           clientId,
@@ -59,6 +74,8 @@ export async function POST(
           descricao: a.descricao,
           nivel: a.nivel,
           detalhes: a.detalhes ? JSON.stringify(a.detalhes) : null,
+          ruleCode: a.ruleCode ?? null,
+          legalSource: a.legalSource ?? null,
         });
       }
     }

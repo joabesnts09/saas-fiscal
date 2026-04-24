@@ -3,9 +3,12 @@
  * Transforma inconsistências (findings) em linguagem de contador: conclusão + recomendações.
  */
 
+import { calculateFiscalScoreFromStored } from "@/lib/fiscal-engine";
+
 export type FiscalAlertLike = {
   tipo: string;
   nivel: string;
+  detalhes?: string | null;
 };
 
 export type ParecerGerado = {
@@ -24,6 +27,10 @@ const TIPO_MENSAGEM: Record<string, { frase: string; recomendacao: string }> = {
   cest_obrigatorio: {
     frase: "itens sem CEST informado (obrigatório para NCMs sujeitos à ST)",
     recomendacao: "Preencher o CEST nos produtos sujeitos à substituição tributária",
+  },
+  cest_incompativel: {
+    frase: "itens com CEST incompatível com o NCM (Convênio ICMS 142/18 / ST)",
+    recomendacao: "Corrigir o CEST conforme a tabela do Convênio ICMS 142/18 para o NCM informado",
   },
   cfop_invalido: {
     frase: "itens com CFOP inválido (deve conter 4 dígitos)",
@@ -71,13 +78,7 @@ export function aggregateFindingsByTipo(alerts: FiscalAlertLike[]): Record<strin
  * Calcula o score fiscal (0–100) a partir dos alertas.
  */
 export function calculateParecerScore(alerts: FiscalAlertLike[]): number {
-  let score = 100;
-  for (const a of alerts) {
-    if (a.nivel === "error") score -= 10;
-    else if (a.nivel === "warning") score -= 3;
-    else if (a.nivel === "info") score -= 1;
-  }
-  return Math.max(0, Math.min(100, score));
+  return calculateFiscalScoreFromStored(alerts);
 }
 
 /**
@@ -130,6 +131,7 @@ export function generateConclusion(
   const tiposOrdem = [
     "ncm_invalido",
     "cest_obrigatorio",
+    "cest_incompativel",
     "cfop_invalido",
     "cfop_incompativel",
     "cst_icms_incompativel",
@@ -171,6 +173,7 @@ export function generateRecommendations(summaryByTipo: Record<string, number>): 
   const tiposOrdem = [
     "ncm_invalido",
     "cest_obrigatorio",
+    "cest_incompativel",
     "cfop_invalido",
     "cfop_incompativel",
     "cst_icms_incompativel",

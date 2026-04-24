@@ -25,6 +25,10 @@ export async function GET(
     const anoFilter = ano && /^\d{4}$/.test(ano) ? ano : null;
     const periodFilter = mesFilter ?? anoFilter;
 
+    const operacaoParam = searchParams.get("operacao")?.trim().toLowerCase();
+    const operacaoFilter: "todos" | "venda" | "compra" =
+      operacaoParam === "venda" || operacaoParam === "compra" ? operacaoParam : "todos";
+
     const notes = await prisma.nfeRecord.findMany({
       where: { clientId },
       select: { itensJson: true, tipo: true, dataEmissao: true },
@@ -50,8 +54,12 @@ export async function GET(
       const monthKey = dataEmissao.length >= 7 ? dataEmissao.slice(0, 7) : "";
       const yearKey = dataEmissao.length >= 4 ? dataEmissao.slice(0, 4) : "";
       const matchesPeriod = !periodFilter || (mesFilter && monthKey === mesFilter) || (anoFilter && yearKey === anoFilter);
+      const matchesOperacao =
+        operacaoFilter === "todos" ||
+        (operacaoFilter === "venda" && note.tipo === "venda") ||
+        (operacaoFilter === "compra" && note.tipo === "compra");
 
-      if (matchesPeriod) {
+      if (matchesPeriod && matchesOperacao) {
         notesCount++;
         if (note.tipo === "venda") vendaCount++;
         else if (note.tipo === "compra") compraCount++;
@@ -76,12 +84,16 @@ export async function GET(
         const vICMS = item.vICMS ?? 0;
         const vProd = item.vProd ?? 0;
 
-        if (monthKey && (!anoFilter || monthKey.startsWith(anoFilter))) {
+        if (
+          matchesOperacao &&
+          monthKey &&
+          (!anoFilter || monthKey.startsWith(anoFilter))
+        ) {
           icmsByMonth[monthKey] = (icmsByMonth[monthKey] ?? 0) + vICMS;
           itemsByMonth[monthKey] = (itemsByMonth[monthKey] ?? 0) + vProd;
         }
 
-        if (!matchesPeriod) continue;
+        if (!matchesPeriod || !matchesOperacao) continue;
 
         itemsCount++;
         totalItemsValue += vProd;
@@ -125,6 +137,7 @@ export async function GET(
       .map(([mes, valor]) => ({ mes, valor }));
 
     return NextResponse.json({
+      operacao: operacaoFilter,
       notesCount,
       vendaCount,
       compraCount,
